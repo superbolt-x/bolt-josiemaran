@@ -96,7 +96,7 @@ meta_base as (
         sum(purchases)        as paid_purchases,
         sum(revenue)          as paid_revenue,
         sum(add_to_cart)      as paid_add_to_cart
-    from {{ source('jm_reporting', 'josiemaran_facebook_performance_by_campaign') }}
+    from {{ source('reporting', 'josiemaran_facebook_performance_by_campaign') }}
     group by 1, 2, 3, 4
 
 ),
@@ -148,7 +148,7 @@ google as (
         cast(null as double precision) as cs_revenue,
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
-    from {{ source('jm_reporting', 'josiemaran_googleads_performance_by_campaign') }}
+    from {{ source('reporting', 'josiemaran_googleads_performance_by_campaign') }}
     group by 1, 2, 3, 4, 5, 6
 
 ),
@@ -190,7 +190,7 @@ tiktok as (
         cast(null as double precision) as cs_revenue,
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
-    from {{ source('jm_reporting', 'josiemaran_tiktok_performance_by_campaign') }}
+    from {{ source('reporting', 'josiemaran_tiktok_performance_by_campaign') }}
     group by 1, 2, 3, 4, 5, 6
 
 ),
