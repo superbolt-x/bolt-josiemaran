@@ -14,90 +14,6 @@
 */
 
 with
-facebook_campaign_performance as (
-SELECT
-account_id,
-     CASE WHEN account_id = '594708350991342' THEN 'DTC'
-         WHEN account_id in ('555228837680936') THEN 'Sephora'
-         ELSE 'Unmapped (' || account_id || ')'
-    END AS account,
-campaign_name,
-campaign_id,
-campaign_effective_status,
-campaign_type_default,
-date,
-date_granularity,
-spend,
-impressions,
-clicks,
-link_clicks,
-add_to_cart,
-purchases,
-revenue,
-
--- Attribution-window splits.
-purchases_7_d_click,
-revenue_7_d_click,
-purchases_1_d_view,
-revenue_1_d_view,
-
--- Shared-item (collaborative ad / catalogue) credit.
-purchases_with_shared_items,
-revenue_with_shared_items
-FROM reporting.josiemaran_facebook_performance_by_campaign
-),
-
-googleads_campaign_performance as (
-SELECT
-account_id,
-campaign_name,
-campaign_id,
-campaign_status,
-campaign_type_default,
-date,
-date_granularity,
-spend,
-impressions,
-clicks,
-conversions as purchases,
-conversions_value as revenue,
-
--- New-customer view, for acquisition CAC/ROAS. The deck's DTC priority is a
--- 70 New / 20 Engaged / 10 Existing split, which needs a new-customer numerator.
-purchasenewcustomer                         as new_customer_purchases,
-purchasenewcustomer_value                   as new_customer_revenue,
-
--- Upper funnel, for the non-brand PMax launch.
-addtocartelevarserverside2                  as add_to_cart,
-begincheckoutelevarserverside2              as begin_checkout,
-
-search_impression_share,
-search_budget_lost_impression_share,
-search_rank_lost_impression_share
-FROM reporting.josiemaran_googleads_performance_by_campaign
-),
-
-tiktok_campaign_performance as (
-SELECT
-campaign_id,
-campaign_name,
-campaign_status,
-campaign_type_default,
-date,
-date_granularity,
-cost                            as spend,
-impressions,
-clicks,
-complete_payment                as purchases,
-total_purchase_value            as revenue,      -- was: total_complete_payment_rate (a RATE)
-web_event_add_to_cart           as add_to_cart,  -- was: atc
-total_purchase,
-total_purchase_value,
-complete_payment,
-value_per_complete_payment
-FROM reporting.josiemaran_tiktok_performance_by_campaign
-),
-
 facebook_catalog_segment_performance__actions as (
 select
         campaign_id,
@@ -322,24 +238,25 @@ group by 1, 2, 3, 4
 ),
 
 blended_performance__segment_map as (
-(select * from (
-        values
-        ('blended_performance__google', '21704002557', 'Google Overall', 'DTC', true),
-        ('blended_performance__google', '21703908630', 'Google Overall', 'DTC', true),
-        ('blended_performance__google', '21703833786', 'Google Overall', 'DTC', true),
-        ('blended_performance__google', '24209915936', 'Google Overall', 'DTC', true),
-        ('blended_performance__meta', '120251956330760613', 'Meta Overall', 'DTC', true),
-        ('blended_performance__meta', '120214146763940613', 'Meta Overall', 'DTC', true),
-        ('blended_performance__meta', '120250319355050303', 'Sephora US Traffic', 'Sephora', false),
-        ('blended_performance__tiktok', '1874691217255666', 'Sephora US Traffic', 'Sephora', false),
-        ('blended_performance__tiktok', '1836369380956178', 'Sephora US Traffic', 'Sephora', false),
-        ('blended_performance__meta', '120219945963310303', 'Sephora US Collab', 'Sephora', false),
-        ('blended_performance__meta', '120250328578570303', 'Sephora CA Traffic', 'Sephora', false),
-        ('blended_performance__tiktok', '1874694608225890', 'Sephora CA Traffic', 'Sephora', false),
-        ('blended_performance__tiktok', '1836386473412625', 'Sephora CA Traffic', 'Sephora', false),
-        ('blended_performance__meta', '120239209497810303', 'Sephora CA Collab', 'Sephora', false),
-        ('blended_performance__meta', '120234201732920613', 'Sephora @ Kohls', 'Sephora', false)
-    ) as t(platform, campaign_id, segment, business_line, dtc_overall))
+(select 'google'::varchar(16)  as platform,
+               '21704002557'::varchar(32) as campaign_id,
+               'Google Overall'::varchar(64) as segment,
+               'DTC'::varchar(16)  as business_line,
+               true::boolean       as dtc_overall
+        union all select 'google', '21703908630', 'Google Overall', 'DTC', true
+        union all select 'google', '21703833786', 'Google Overall', 'DTC', true
+        union all select 'google', '24209915936', 'Google Overall', 'DTC', true
+        union all select 'meta', '120251956330760613', 'Meta Overall', 'DTC', true
+        union all select 'meta', '120214146763940613', 'Meta Overall', 'DTC', true
+        union all select 'meta', '120250319355050303', 'Sephora US Traffic', 'Sephora', false
+        union all select 'tiktok', '1874691217255666', 'Sephora US Traffic', 'Sephora', false
+        union all select 'tiktok', '1836369380956178', 'Sephora US Traffic', 'Sephora', false
+        union all select 'meta', '120219945963310303', 'Sephora US Collab', 'Sephora', false
+        union all select 'meta', '120250328578570303', 'Sephora CA Traffic', 'Sephora', false
+        union all select 'tiktok', '1874694608225890', 'Sephora CA Traffic', 'Sephora', false
+        union all select 'tiktok', '1836386473412625', 'Sephora CA Traffic', 'Sephora', false
+        union all select 'meta', '120239209497810303', 'Sephora CA Collab', 'Sephora', false
+        union all select 'meta', '120234201732920613', 'Sephora @ Kohls', 'Sephora', false)
 ),
 
 blended_performance__meta_base as (
@@ -354,14 +271,14 @@ select
         sum(purchases)        as paid_purchases,
         sum(revenue)          as paid_revenue,
         sum(add_to_cart)      as paid_add_to_cart
-    from facebook_campaign_performance
+    from reporting.josiemaran_facebook_performance_by_campaign
     group by 1, 2, 3, 4
 ),
 
 blended_performance__meta as (
 select
         'Meta'                  as channel,
-        'blended_performance__meta'                  as platform,
+        'meta'                  as platform,
         m.campaign_id,
         m.campaign_name,
         m.date,
@@ -382,44 +299,50 @@ select
 blended_performance__google as (
 select
         'Google'                as channel,
-        'blended_performance__google'                as platform,
+        'google'                as platform,
         campaign_id::varchar    as campaign_id,
         campaign_name,
         date,
         date_granularity,
-        sum(spend)              as spend,
-        sum(impressions)        as impressions,
-        sum(clicks)             as clicks,
-        sum(purchases)          as paid_purchases,
-        sum(revenue)            as paid_revenue,
-        sum(add_to_cart)        as paid_add_to_cart,
+        sum(spend)                          as spend,
+        sum(impressions)                    as impressions,
+        sum(clicks)                         as clicks,
+        -- `conversions`/`conversions_value` are the correct headline mapping:
+        -- the account is run to a deliberate 1,000% tROAS on branded search and
+        -- reconciles at 0.24x store orders on a window where both sources are
+        -- healthy. Derived here so this model does not depend on
+        -- googleads_campaign_performance.
+        sum(conversions)                    as paid_purchases,
+        sum(conversions_value)              as paid_revenue,
+        sum(addtocartelevarserverside2)     as paid_add_to_cart,
         cast(null as double precision) as cs_purchases,
         cast(null as double precision) as cs_revenue,
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
-    from googleads_campaign_performance
+    from reporting.josiemaran_googleads_performance_by_campaign
     group by 1, 2, 3, 4, 5, 6
 ),
 
 blended_performance__tiktok as (
 select
-        'TikTok'                as channel,
-        'blended_performance__tiktok'                as platform,
-        campaign_id::varchar    as campaign_id,
+        'TikTok'                    as channel,
+        'tiktok'                    as platform,
+        campaign_id::varchar        as campaign_id,
         campaign_name,
         date,
         date_granularity,
-        spend,
-        impressions,
-        clicks::double precision as clicks,
-        purchases               as paid_purchases,
-        revenue                 as paid_revenue,
-        add_to_cart             as paid_add_to_cart,
+        sum(cost)                   as spend,
+        sum(impressions)            as impressions,
+        sum(clicks)::double precision as clicks,
+        sum(complete_payment)       as paid_purchases,
+        sum(total_purchase_value)   as paid_revenue,   -- NOT total_complete_payment_rate
+        sum(web_event_add_to_cart)  as paid_add_to_cart,
         cast(null as double precision) as cs_purchases,
         cast(null as double precision) as cs_revenue,
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
-    from tiktok_campaign_performance
+    from reporting.josiemaran_tiktok_performance_by_campaign
+    group by 1, 2, 3, 4, 5, 6
 ),
 
 blended_performance__paid_union as (
@@ -437,7 +360,11 @@ select
         (case
         when coalesce(s.segment, 'Unmapped') like '%US%' then 'US'
         when coalesce(s.segment, 'Unmapped') like '%CA%' then 'CA'
-        when coalesce(s.segment, 'Unmapped') in ('Meta Overall', 'Google Overall') then 'US'
+        -- Kohl's and the two DTC rollups carry no region token in the segment
+        -- name. Sephora at Kohl's is a US retailer, and 19,552 of 19,636
+        -- Shopify orders (99.6%) ship to the US.
+        when coalesce(s.segment, 'Unmapped') in ('Meta Overall', 'Google Overall',
+                              'Sephora @ Kohls')                then 'US'
         else 'Unknown'
     end) as market,
         cast(null as varchar(16))                           as order_type,

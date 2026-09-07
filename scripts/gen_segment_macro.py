@@ -44,13 +44,27 @@ by_seg = {}
 for r in rows:
     by_seg.setdefault(r["segment"].strip(), []).append(r)
 
-values = ",\n".join(
-    "        ('{p}', '{cid}', '{seg}', '{bl}', {dtc})".format(
-        p=r["platform"].strip(), cid=r["campaign_id"].strip(),
-        seg=r["segment"].strip().replace("'", "''"),
-        bl=r["business_line"].strip(), dtc=r["dtc_overall"].strip().lower())
-    for r in rows
-)
+# Redshift does NOT support VALUES as a table constructor inside a subquery or
+# CTE — only in INSERT ... VALUES. So the mapping is emitted as a UNION ALL of
+# SELECTs. The first row carries explicit casts: without them Redshift sizes
+# each varchar from the first literal it sees and silently truncates the longer
+# rows ('Google Overall' is 14 chars, 'Sephora US Traffic' is 18).
+_lines = []
+for i, r in enumerate(rows):
+    p_, cid = r["platform"].strip(), r["campaign_id"].strip()
+    seg = r["segment"].strip().replace("'", "''")
+    bl, dtc = r["business_line"].strip(), r["dtc_overall"].strip().lower()
+    if i == 0:
+        _lines.append(
+            f"        select '{p_}'::varchar(16)  as platform,\n"
+            f"               '{cid}'::varchar(32) as campaign_id,\n"
+            f"               '{seg}'::varchar(64) as segment,\n"
+            f"               '{bl}'::varchar(16)  as business_line,\n"
+            f"               {dtc}::boolean       as dtc_overall"
+        )
+    else:
+        _lines.append(f"        union all select '{p_}', '{cid}', '{seg}', '{bl}', {dtc}")
+values = "\n".join(_lines)
 
 summary = "\n".join(
     f"      {seg:<20} {len(v)} campaign(s): "
@@ -82,13 +96,14 @@ DEST.write_text(f"""{{#
 
   `Paid DTC Overall` is the rollup of every row with dtc_overall = true —
   the Meta Overall and Google Overall campaigns together.
+
+  Emitted as UNION ALL rather than VALUES: Redshift rejects VALUES as a table
+  constructor inside a CTE. Explicit casts on the first row stop it sizing each
+  varchar from the first literal and truncating the rest.
 #}}
 
 {{% macro jm_campaign_segments() %}}
-    select * from (
-        values
 {values}
-    ) as t(platform, campaign_id, segment, business_line, dtc_overall)
 {{% endmacro %}}
 
 
@@ -100,7 +115,11 @@ DEST.write_text(f"""{{#
     case
         when {{{{ segment }}}} like '%US%' then 'US'
         when {{{{ segment }}}} like '%CA%' then 'CA'
-        when {{{{ segment }}}} in ('Meta Overall', 'Google Overall') then 'US'
+        -- Kohl's and the two DTC rollups carry no region token in the segment
+        -- name. Sephora at Kohl's is a US retailer, and 19,552 of 19,636
+        -- Shopify orders (99.6%) ship to the US.
+        when {{{{ segment }}}} in ('Meta Overall', 'Google Overall',
+                              'Sephora @ Kohls')                then 'US'
         else 'Unknown'
     end
 {{% endmacro %}}

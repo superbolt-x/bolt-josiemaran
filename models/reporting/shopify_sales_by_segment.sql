@@ -54,7 +54,7 @@ with orders as (
         coalesce(total_tax, 0)        as total_tax,
         coalesce(shipping_price, 0)   as shipping_price
 
-    from {{ ref('shopify_daily_sales_by_order') }}
+    from {{ source('jm_reporting', 'josiemaran_shopify_daily_sales_by_order') }}
     where date >= '{{ var("shopify_history_floor") }}'
       and cancelled_at is null
 

@@ -28,27 +28,32 @@
 
   `Paid DTC Overall` is the rollup of every row with dtc_overall = true —
   the Meta Overall and Google Overall campaigns together.
+
+  Emitted as UNION ALL rather than VALUES: Redshift rejects VALUES as a table
+  constructor inside a CTE. Explicit casts on the first row stop it sizing each
+  varchar from the first literal and truncating the rest.
 #}
 
 {% macro jm_campaign_segments() %}
-    select * from (
-        values
-        ('google', '21704002557', 'Google Overall', 'DTC', true),
-        ('google', '21703908630', 'Google Overall', 'DTC', true),
-        ('google', '21703833786', 'Google Overall', 'DTC', true),
-        ('google', '24209915936', 'Google Overall', 'DTC', true),
-        ('meta', '120251956330760613', 'Meta Overall', 'DTC', true),
-        ('meta', '120214146763940613', 'Meta Overall', 'DTC', true),
-        ('meta', '120250319355050303', 'Sephora US Traffic', 'Sephora', false),
-        ('tiktok', '1874691217255666', 'Sephora US Traffic', 'Sephora', false),
-        ('tiktok', '1836369380956178', 'Sephora US Traffic', 'Sephora', false),
-        ('meta', '120219945963310303', 'Sephora US Collab', 'Sephora', false),
-        ('meta', '120250328578570303', 'Sephora CA Traffic', 'Sephora', false),
-        ('tiktok', '1874694608225890', 'Sephora CA Traffic', 'Sephora', false),
-        ('tiktok', '1836386473412625', 'Sephora CA Traffic', 'Sephora', false),
-        ('meta', '120239209497810303', 'Sephora CA Collab', 'Sephora', false),
-        ('meta', '120234201732920613', 'Sephora @ Kohls', 'Sephora', false)
-    ) as t(platform, campaign_id, segment, business_line, dtc_overall)
+        select 'google'::varchar(16)  as platform,
+               '21704002557'::varchar(32) as campaign_id,
+               'Google Overall'::varchar(64) as segment,
+               'DTC'::varchar(16)  as business_line,
+               true::boolean       as dtc_overall
+        union all select 'google', '21703908630', 'Google Overall', 'DTC', true
+        union all select 'google', '21703833786', 'Google Overall', 'DTC', true
+        union all select 'google', '24209915936', 'Google Overall', 'DTC', true
+        union all select 'meta', '120251956330760613', 'Meta Overall', 'DTC', true
+        union all select 'meta', '120214146763940613', 'Meta Overall', 'DTC', true
+        union all select 'meta', '120250319355050303', 'Sephora US Traffic', 'Sephora', false
+        union all select 'tiktok', '1874691217255666', 'Sephora US Traffic', 'Sephora', false
+        union all select 'tiktok', '1836369380956178', 'Sephora US Traffic', 'Sephora', false
+        union all select 'meta', '120219945963310303', 'Sephora US Collab', 'Sephora', false
+        union all select 'meta', '120250328578570303', 'Sephora CA Traffic', 'Sephora', false
+        union all select 'tiktok', '1874694608225890', 'Sephora CA Traffic', 'Sephora', false
+        union all select 'tiktok', '1836386473412625', 'Sephora CA Traffic', 'Sephora', false
+        union all select 'meta', '120239209497810303', 'Sephora CA Collab', 'Sephora', false
+        union all select 'meta', '120234201732920613', 'Sephora @ Kohls', 'Sephora', false
 {% endmacro %}
 
 
@@ -60,7 +65,11 @@
     case
         when {{ segment }} like '%US%' then 'US'
         when {{ segment }} like '%CA%' then 'CA'
-        when {{ segment }} in ('Meta Overall', 'Google Overall') then 'US'
+        -- Kohl's and the two DTC rollups carry no region token in the segment
+        -- name. Sephora at Kohl's is a US retailer, and 19,552 of 19,636
+        -- Shopify orders (99.6%) ship to the US.
+        when {{ segment }} in ('Meta Overall', 'Google Overall',
+                              'Sephora @ Kohls')                then 'US'
         else 'Unknown'
     end
 {% endmacro %}

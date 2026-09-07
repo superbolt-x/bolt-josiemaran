@@ -121,18 +121,3 @@ models:
           In-store purchases. 62% of US Traffic's conversions vs 7% of US
           Collab's — traffic drives footfall, collab drives sephora.com.
 
-  - name: tiktok_campaign_performance
-    description: >
-      Campaign-grain TikTok. The blended layer reads this rather than
-      tiktok_ad_performance, whose ad→adgroup→campaign join returns NULL
-      campaign_id for both campaigns launched 2026-08-27 ($9,507, 100% of
-      current TikTok spend). Also fixes `revenue`, which the previously-built
-      version mapped to `total_complete_payment_rate` — a rate, not a value.
-    columns:
-      - name: campaign_id
-        tests: [not_null]
-      - name: date_granularity
-        tests:
-          - not_null
-          - accepted_values:
-              values: ['day', 'week', 'month', 'quarter', 'year']
