@@ -13,8 +13,8 @@ sheet techniques want. ~**652 rows × 38 columns** at current volumes:
 
 | `report_level` | Rows | Grain | Read |
 |---|---|---|---|
-| `Sephora Segment` | 143 | week ×13 | `cs_*` |
-| `DTC Channel` | 156 | week ×13 | `paid_*` / `site_*` / `blended_*` |
+| `Sephora Segment` | ~110 | week ×13 | `cs_*` |
+| `DTC Segment` | ~55 | week ×13 | `paid_*` / `site_*` / `blended_*` |
 | `Business` | 144 | month ×18 | mixed — see `read_metrics` |
 | `Campaign` | 130 | week ×9 | `cs_*` or `paid_*` |
 | `Site` | 65 | week ×13 | `site_*` |
@@ -138,7 +138,7 @@ Metric blocks for `Sephora WoW`: **spend · cs_purchases · cs_revenue · cs_roa
 cs_cpa · pct_instore · cpc · ctr**. Note what is absent — no `paid_roas`, no
 `blended_roas`. Neither applies to this business.
 
-For `DTC WoW`, swap the level to `"DTC Channel"` and use **spend ·
+For `DTC WoW`, swap the level to `"DTC Segment"` and use **spend ·
 paid_purchases · paid_roas · paid_cpa · site_orders · site_new_customers ·
 blended_cac · blended_roas · aov · pct_new**.
 

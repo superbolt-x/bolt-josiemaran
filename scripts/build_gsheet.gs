@@ -31,16 +31,16 @@ var MONTHS = 12;        // month columns on the Monthly tab
 var CONFIG = {
   'Sephora WoW': {
     level: 'Sephora Segment',
+    // Labels are the segment names from seeds/campaign_segments.csv, which come
+    // from the reporting deck. Collab sits above Traffic on purpose: it is a
+    // small share of spend and nearly all of the measured purchases.
     rows: [
-      ['Sephora – Total', 'All', ''],
-      ['US Collab',       'All', 1.50],
-      ['CA Collab',       'All', 2.50],
-      ['US Traffic',      'All', ''],
-      ['CA Traffic',      'All', ''],
-      ['Kohls Traffic',   'All', ''],
-      ['US ATC',          'All', ''],
-      ['CA ATC',          'All', ''],
-      ['US Engagement',   'All', '']
+      ['Sephora – Total',    'All', ''],
+      ['Sephora US Collab',  'All', 1.50],
+      ['Sephora CA Collab',  'All', 2.50],
+      ['Sephora US Traffic', 'All', ''],
+      ['Sephora CA Traffic', 'All', ''],
+      ['Sephora @ Kohls',    'All', '']
     ],
     // Sephora converts on Sephora's pixel: cs_* only. No paid_roas, no blended.
     blocks: [
@@ -58,16 +58,15 @@ var CONFIG = {
     flagBlocks: ['SEPHORA PURCHASES', 'SEPHORA REVENUE', 'SEPHORA ROAS', 'SEPHORA CPA', '% IN STORE']
   },
   'DTC WoW': {
-    level: 'DTC Channel',
+    level: 'DTC Segment',
+    // `Paid DTC Overall` = the Meta Overall + Google Overall campaign IDs, NOT
+    // everything in the DTC account. Historical DTC campaigns are 'Unmapped'
+    // and deliberately excluded — see the Health tab for their spend.
     rows: [
-      ['Blended DTC',     'All', 3.50],
-      ['Meta',            'All', 2.50],
-      ['Google',          'All', 10.00],
-      ['Shopify',         'All', ''],
-      ['DTC ASC',         'All', ''],
-      ['DTC Prospecting', 'All', ''],
-      ['DTC Retargeting', 'All', ''],
-      ['DTC Lifecycle',   'All', '']
+      ['Paid DTC Overall', 'All', 3.50],
+      ['Meta Overall',     'All', 2.50],
+      ['Google Overall',   'All', 10.00],
+      ['Site',             'All', '']
     ],
     blocks: [
       ['SPEND',            'spend',              '$#,##0'],
@@ -114,6 +113,7 @@ var MONTHLY = {
     ['Total Paid',        'All', ''],
     ['Sephora',           'All', ''],
     ['Sephora – Meta',    'All', ''],
+    ['Sephora – TikTok',  'All', ''],
     ['DTC',               'All', ''],
     ['DTC – Meta',        'All', ''],
     ['DTC – Google',      'All', ''],
@@ -385,9 +385,12 @@ function writeReadme_(ss) {
     ['actions it has driven 6,797 purchases and $274,382 since March 2025.'],
     [''],
     ['COLLAB AND TRAFFIC MUST NEVER BE AVERAGED.'],
-    ['Lifetime: US Traffic $1,460,035 → 0.04 ROAS ($937 CPA). US Collab $72,422 → 1.14 ROAS ($36).'],
-    ['CA Collab $12,627 → 2.93 ROAS ($14). Collab spends 4.8% of Traffic\'s budget for 60% more'],
-    ['purchases. In the week of 2026-08-31 it was 7.5% of Sephora spend and 145 of 148 purchases.'],
+    ['Lifetime, on the deck\'s campaign IDs: US Collab $72,422 -> 1.14 ROAS ($36 CPA).'],
+    ['CA Collab $12,627 -> 2.93 ROAS ($14 CPA). US Traffic $202,850 and CA Traffic $66,321 ->'],
+    ['no catalog-segment conversions at all, because the campaigns currently defined as Traffic'],
+    ['are the new SB ones (no catalog linkage) plus TikTok (no conversion data of any kind).'],
+    ['In the week of 2026-08-31, Traffic was 94% of Sephora spend and Collab produced all 145'],
+    ['measured purchases.'],
     [''],
     ['AMBER = REAL SPEND, UNREPORTED CONVERSIONS.'],
     ['The new "SB - US/CA - Sephora ... Traffic" campaigns replaced the legacy traffic campaigns'],
@@ -415,9 +418,15 @@ function writeReadme_(ss) {
     ['channel in the current week. Google\'s ~1,100% ROAS is correct — branded search is run to a'],
     ['deliberate 1,000% tROAS.'],
     [''],
-    ['THREE CAMPAIGN NAMING CONVENTIONS ARE LIVE — tagged "plat:...", new "SB - ...", legacy'],
-    ['"BD - ...". The dbt macros handle all three. A campaign matching none lands in Unclassified'],
-    ['and shows up on the Health tab.'],
+    ['SEGMENTS COME FROM CAMPAIGN IDS, NOT CAMPAIGN NAMES.'],
+    ['The mapping is seeds/campaign_segments.csv in bolt-josiemaran, taken from the reporting'],
+    ['deck. The account was inherited and carries three incompatible naming conventions, the same'],
+    ['objective spelled three ways, and region as us/US/ca/CA/USA — so names were never a safe'],
+    ['key. A campaign ID that is not in the mapping gets segment Unmapped, appears on NO segment'],
+    ['row, and is reported on the Health tab. When a campaign launches, add its ID to the CSV.'],
+    [''],
+    ['The nine predecessors of the current structure all stopped spending by 2026-08-27 and are'],
+    ['intentionally unmapped ($44k over the trailing 30 days). That is the transition, not a gap.'],
     [''],
     ['HOW THIS SHEET WORKS'],
     ['feed        one Metabase question, written by the extension. Never edit, sort or format it.'],
