@@ -30,10 +30,11 @@ DB   = "josiemaran"
 VARS = {"shopify_history_floor": "2026-03-25"}
 
 # Models rendered as CTEs, in dependency order.
+# Only the four models we own. facebook_campaign_performance and
+# googleads_campaign_performance are deliberately NOT here: blended_performance
+# reads the package reporting tables as sources instead, so dbt never rebuilds
+# their lineage. See models/reporting/_sources.yml.
 CHAIN = [
-    "facebook_campaign_performance",
-    "googleads_campaign_performance",
-    "tiktok_campaign_performance",
     "facebook_catalog_segment_performance",
     "shopify_sales_by_segment",
     "blended_performance",
@@ -50,7 +51,10 @@ BASE_TABLES = {
     "tiktok_performance_by_campaign":     f"reporting.{DB}_tiktok_performance_by_campaign",
 }
 
-SOURCE_SCHEMAS = {"facebook_catalog_raw": "facebook_raw"}
+SOURCE_SCHEMAS = {
+    "facebook_catalog_raw": "facebook_raw",
+    "jm_reporting":         "reporting",
+}
 
 
 def load_macros() -> dict:
@@ -258,13 +262,56 @@ def split_last_select(body: str):
     raise RuntimeError("walked the whole body without finding a final SELECT")
 
 
+def split_literals(text):
+    """
+    Split SQL into alternating (non_literal, literal) spans so identifier
+    rewriting can skip anything inside single quotes.
+    """
+    spans, i, n, buf = [], 0, len(text), ""
+    while i < n:
+        if text[i] == "'":
+            spans.append((buf, False)); buf = ""
+            j = i + 1
+            while j < n:
+                if text[j] == "'":
+                    if j + 1 < n and text[j + 1] == "'":   # escaped ''
+                        j += 2; continue
+                    break
+                j += 1
+            spans.append((text[i : j + 1], True))
+            i = j + 1
+        else:
+            buf += text[i]; i += 1
+    if buf:
+        spans.append((buf, False))
+    return spans
+
+
 def prefix_ctes(inner, final, model):
-    """Namespace a model's internal CTE names so models can't collide."""
+    """
+    Namespace a model's internal CTE names so two models can't collide on a
+    shared helper name (`grains`, `orders`, `meta`, …).
+
+    Rewrites identifiers ONLY outside string literals. An earlier version used a
+    bare regex over the whole body, which renamed the *data* in the campaign-ID
+    mapping: the literals 'google' and 'meta' collided with the CTE names
+    `google` and `meta` and became 'blended_performance__google' /
+    'blended_performance__meta'. The platform join then matched nothing and
+    every campaign came out 'Unmapped' — with no error anywhere.
+    """
     mapping = {nm: f"{model}__{nm}" for nm, _ in inner}
+
     def swap(text):
-        for old, new in mapping.items():
-            text = re.sub(rf"(?<![\w.]){re.escape(old)}(?![\w])", new, text)
-        return text
+        out = []
+        for span, is_literal in split_literals(text):
+            if is_literal:
+                out.append(span)
+                continue
+            for old, new in mapping.items():
+                span = re.sub(rf"(?<![\w.]){re.escape(old)}(?![\w])", new, span)
+            out.append(span)
+        return "".join(out)
+
     renamed = [(mapping[nm], swap(bd)) for nm, bd in inner]
     return renamed, swap(final)
 

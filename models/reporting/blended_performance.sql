@@ -1,5 +1,6 @@
 {{ config (
-    alias = target.database + '_blended_performance'
+    alias = target.database + '_blended_performance',
+    tags = ['jm_blended']
 )}}
 
 /*
@@ -45,6 +46,19 @@
   2026 spend. On catalog segment actions: 6,797 purchases, $274,382 since
   March 2025.
 
+  ── Why sources, not refs ───────────────────────────────────────────────────
+  Meta and Google are read from `source('jm_reporting', …)` — the package
+  reporting tables that are already built and paid for. A ref() would pull
+  their whole package lineage into every build of ours; one run rebuilt
+  facebook_base.facebook_performance_by_campaign_daily (50s),
+  shopify_base.shopify_orders and two staging models before reaching this
+  model. Sources are read-only to dbt, so `--select tag:jm_blended` builds
+  exactly four models in seconds.
+
+  The columns are derived here rather than borrowed from
+  facebook_campaign_performance / googleads_campaign_performance, so this model
+  does not depend on those at all.
+
   ── TikTok ──────────────────────────────────────────────────────────────────
   Read from tiktok_campaign_performance, NOT tiktok_ad_performance — the
   ad-grain model returns NULL campaign_id for both live TikTok campaigns
@@ -83,7 +97,7 @@ meta_base as (
         sum(purchases)        as paid_purchases,
         sum(revenue)          as paid_revenue,
         sum(add_to_cart)      as paid_add_to_cart
-    from {{ ref('facebook_campaign_performance') }}
+    from {{ source('jm_reporting', 'josiemaran_facebook_performance_by_campaign') }}
     group by 1, 2, 3, 4
 
 ),
@@ -120,41 +134,65 @@ google as (
         campaign_name,
         date,
         date_granularity,
-        sum(spend)              as spend,
-        sum(impressions)        as impressions,
-        sum(clicks)             as clicks,
-        sum(purchases)          as paid_purchases,
-        sum(revenue)            as paid_revenue,
-        sum(add_to_cart)        as paid_add_to_cart,
+        sum(spend)                          as spend,
+        sum(impressions)                    as impressions,
+        sum(clicks)                         as clicks,
+        -- `conversions`/`conversions_value` are the correct headline mapping:
+        -- the account is run to a deliberate 1,000% tROAS on branded search and
+        -- reconciles at 0.24x store orders on a window where both sources are
+        -- healthy. Derived here so this model does not depend on
+        -- googleads_campaign_performance.
+        sum(conversions)                    as paid_purchases,
+        sum(conversions_value)              as paid_revenue,
+        sum(addtocartelevarserverside2)     as paid_add_to_cart,
         cast(null as double precision) as cs_purchases,
         cast(null as double precision) as cs_revenue,
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
-    from {{ ref('googleads_campaign_performance') }}
+    from {{ source('jm_reporting', 'josiemaran_googleads_performance_by_campaign') }}
     group by 1, 2, 3, 4, 5, 6
 
 ),
 
 tiktok as (
 
+    /*  Sourced from the package base table, not from
+        josiemaran_tiktok_campaign_performance, for two reasons:
+
+        1. That table already exists and is built elsewhere — sourcing the base
+           table keeps this model independent of it and avoids a second model
+           writing the same alias.
+        2. Its `revenue` column maps to `total_complete_payment_rate`, which is
+           a RATE, not a currency amount (there is no
+           `total_complete_payment_value` in the source). Currently harmless
+           because every TikTok conversion column is zero, but it would feed a
+           conversion rate into ROAS the moment the connector is fixed. The
+           correct value counterpart is `total_purchase_value`, used here.
+
+        Campaign grain, not ad grain: the ad-grain model resolves campaign via
+        ad_history → adgroup_history → campaign_history, and the two campaigns
+        launched 2026-08-27 have insight rows but no ad_history rows, so
+        campaign_id comes back NULL for $9,507 — all current TikTok spend.  */
+
     select
-        'TikTok'                as channel,
-        'tiktok'                as platform,
-        campaign_id::varchar    as campaign_id,
+        'TikTok'                    as channel,
+        'tiktok'                    as platform,
+        campaign_id::varchar        as campaign_id,
         campaign_name,
         date,
         date_granularity,
-        spend,
-        impressions,
-        clicks::double precision as clicks,
-        purchases               as paid_purchases,
-        revenue                 as paid_revenue,
-        add_to_cart             as paid_add_to_cart,
+        sum(cost)                   as spend,
+        sum(impressions)            as impressions,
+        sum(clicks)::double precision as clicks,
+        sum(complete_payment)       as paid_purchases,
+        sum(total_purchase_value)   as paid_revenue,   -- NOT total_complete_payment_rate
+        sum(web_event_add_to_cart)  as paid_add_to_cart,
         cast(null as double precision) as cs_purchases,
         cast(null as double precision) as cs_revenue,
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
-    from {{ ref('tiktok_campaign_performance') }}
+    from {{ source('jm_reporting', 'josiemaran_tiktok_performance_by_campaign') }}
+    group by 1, 2, 3, 4, 5, 6
 
 ),
 

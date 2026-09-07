@@ -107,6 +107,17 @@ def main(path):
           + ("" if not bad_unions else f"  → {bad_unions}"))
     if bad_unions: fails.append("union-mismatch")
 
+    # 6 — namespacing leaked into a string literal
+    # The compiler prefixes a model's internal CTE names to avoid collisions.
+    # If that rewrite touches a string literal it corrupts DATA, not just
+    # identifiers — 'google' became 'blended_performance__google' once, which
+    # silently made every campaign 'Unmapped'. A literal of the form
+    # <word>__<word> is almost always this bug.
+    literals = re.findall(r"'([a-z_]+__[a-z_]+)'", sql)
+    print(f"{'✓' if not literals else '✗'} no CTE prefix inside a string literal"
+          + ("" if not literals else f"  → {sorted(set(literals))[:5]}"))
+    if literals: fails.append("literal-polluted")
+
     print(f"\n{'PASS' if not fails else 'FAIL: ' + ', '.join(fails)}"
           f"   ({len(raw):,} chars, {raw.count(chr(10)):,} lines)")
     return 1 if fails else 0
