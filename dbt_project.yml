@@ -28,6 +28,10 @@ vars:
     googleads_conversion_used_by_custom_conversions: 'all_conversions'   # Googleads custom conversions can use conversions or all_conversions
 
     # Shopify vars
+    # Order history begins 2026-03-25. Refunds sync from 2016, so without this
+    # floor the reporting layer carries years of orders=0 / negative net_sales
+    # rows (-$270k in 2025 alone). Lower this only after a Shopify backfill.
+    shopify_history_floor: '2026-03-25'
     time_zone: 'US/Eastern'
     order_tags_keyword_exclusion: 'dummy' # exclude orders with tags including certain keywords from analytics e.g. 'dummy1|dummy2'
     sales_channel_exclusion: 'dummy' # exclude orders that came from certain sales channels from analytics e.g. 'channel1|channel2'

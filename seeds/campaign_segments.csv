@@ -1,0 +1,16 @@
+platform,campaign_id,segment,business_line,dtc_overall,campaign_name_when_mapped
+google,21704002557,Google Overall,DTC,true,plat:google_..._subchan:brand-search_..._reg:US
+google,21703908630,Google Overall,DTC,true,plat:google_..._subchan:brand-search_..._reg:CA
+google,21703833786,Google Overall,DTC,true,plat:google_..._subchan:paid-pmax_..._reg:us
+google,24209915936,Google Overall,DTC,true,SB - PMax - Nonbrand
+meta,120251956330760613,Meta Overall,DTC,true,SB - DTC Prospecting Advantage+ - Evergreen - Purchase Campaign
+meta,120214146763940613,Meta Overall,DTC,true,plat:meta_..._subchan:paidsocial-ASC_..._obj:website-and-shop-sales_reg:us
+meta,120250319355050303,Sephora US Traffic,Sephora,false,SB - US - Sephora Prospecting - Evergreen - Traffic - Clicks
+tiktok,1874691217255666,Sephora US Traffic,Sephora,false,SB - Sephora Prospecting US - Evergreen - Traffic
+tiktok,1836369380956178,Sephora US Traffic,Sephora,false,plat:tiktok_..._obj:Reach_..._reg:us
+meta,120219945963310303,Sephora US Collab,Sephora,false,plat:meta_..._obj:Purchase_..._reg:us
+meta,120250328578570303,Sephora CA Traffic,Sephora,false,SB - CA - Sephora Prospecting - Evergreen - Traffic - Clicks
+tiktok,1874694608225890,Sephora CA Traffic,Sephora,false,SB - Sephora Prospecting CA - Evergreen - Traffic
+tiktok,1836386473412625,Sephora CA Traffic,Sephora,false,plat:tiktok_..._obj:Reach_..._reg:ca
+meta,120239209497810303,Sephora CA Collab,Sephora,false,plat:meta_..._obj:Purchase_..._reg:CA
+meta,120234201732920613,Sephora @ Kohls,Sephora,false,plat:meta_..._temp:sephora-KOHLS_obj:traffic_reg:us

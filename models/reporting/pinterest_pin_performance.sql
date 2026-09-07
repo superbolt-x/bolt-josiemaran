@@ -1,6 +1,18 @@
 {{ config (
+    enabled = false,
     alias = target.database + '_pinterest_pin_performance'
 )}}
+
+/*
+    DISABLED — Pinterest is not live.
+
+    Pinterest is not a live channel for Josie Maran. No `pinterest_*` table
+    exists in the warehouse.
+
+    Left in the repo rather than deleted so the mapping is recoverable if the
+    channel is switched on. `enabled = false` keeps it out of `dbt run` /
+    `dbt build` instead of failing on a missing source at runtime.
+*/
 
 SELECT 
 advertiser_name,
