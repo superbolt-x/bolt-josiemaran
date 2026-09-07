@@ -1,1 +1,138 @@
 version: 2
+
+models:
+
+  - name: blended_performance
+    description: >
+      Cross-channel fact table. One row per channel × business_line × funnel ×
+      market × order_type × campaign_name × date × date_granularity. Paid rows
+      carry spend and platform-attributed conversions; Shopify rows carry site
+      orders and revenue. Never SUM across date_granularity values.
+    columns:
+      - name: channel
+        description: "Meta | Google | TikTok | Shopify"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Meta', 'Google', 'TikTok', 'Shopify']
+
+      - name: campaign_id
+        description: >
+          The join key for the segment mapping. NULL only on Shopify site rows.
+          A paid row with a NULL campaign_id cannot be segmented at all — that
+          was the state of 100% of TikTok spend before this model moved to
+          campaign grain.
+      - name: business_line
+        description: >
+          The two P&Ls in the 2026 plan — $57.2M Sephora, $17.2M JM.com.
+          'Sephora' converts on Sephora's pixel (measure on cs_*), 'DTC' on
+          josiemaran.com (measure on shopify_* / paid_*). Shopify rows are
+          stamped DTC by design so neither denominator can borrow the other's
+          numerator. 'Unmapped' where the campaign ID is not in the seed.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Sephora', 'DTC', 'Unmapped']
+
+      - name: segment
+        description: >
+          Assigned by CAMPAIGN ID from seeds/campaign_segments.csv, taken from
+          the reporting deck — not parsed from campaign names. Seven segments
+          plus 'Unmapped' and 'Site'. Traffic and Collab must never be summed.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Google Overall', 'Meta Overall', 'Sephora US Traffic',
+                       'Sephora US Collab', 'Sephora CA Traffic',
+                       'Sephora CA Collab', 'Sephora @ Kohls',
+                       'Unmapped', 'Site']
+
+      - name: in_dtc_overall
+        description: >
+          TRUE for the Meta Overall + Google Overall campaigns. `Paid DTC
+          Overall` is the rollup of these, NOT everything in the DTC account —
+          historical DTC campaigns are 'Unmapped' and excluded.
+        tests: [not_null]
+      - name: cs_purchases
+        description: >
+          Sephora purchases from catalog segment `omni_purchase` — web + app +
+          IN STORE. The only place Sephora conversions exist. Never add cs_* to
+          paid_* or shopify_*; they measure different businesses.
+      - name: market
+        tests:
+          - not_null
+      - name: date
+        tests: [not_null]
+      - name: date_granularity
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['day', 'week', 'month', 'quarter', 'year']
+
+  - name: shopify_sales_by_segment
+    description: >
+      Site sales re-aggregated from order grain so they carry market and
+      order_type, which the packaged shopify_sales rollup does not. Floored at
+      var('shopify_history_floor') because order history begins 2026-03-25
+      while refunds sync from 2016.
+    columns:
+      - name: market
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['US', 'CA', 'Other', 'Unknown']
+      - name: order_type
+        description: "Web | Subscription | Other | Unknown. Subscriptions are ~21% of orders."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Web', 'Subscription', 'Other', 'Unknown']
+      - name: orders
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+      - name: gross_sales
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+
+  - name: facebook_catalog_segment_performance
+    description: >
+      Collaborative Ads catalog-segment conversions, pivoted out of the EAV raw
+      tables. Action types NEST (omni_purchase = web + offline + app), so a
+      naive SUM across action_type over-counts by 824x — 5,599,760 vs the
+      correct 6,797. Pivoting named types makes that mistake unavailable.
+    columns:
+      - name: campaign_id
+        tests: [not_null]
+      - name: date
+        tests: [not_null]
+      - name: date_granularity
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['day', 'week', 'month', 'quarter', 'year']
+      - name: cs_purchases
+        description: "omni_purchase count. Headline Sephora conversion."
+      - name: cs_offline_purchases
+        description: >
+          In-store purchases. 62% of US Traffic's conversions vs 7% of US
+          Collab's — traffic drives footfall, collab drives sephora.com.
+
+  - name: tiktok_campaign_performance
+    description: >
+      Campaign-grain TikTok. The blended layer reads this rather than
+      tiktok_ad_performance, whose ad→adgroup→campaign join returns NULL
+      campaign_id for both campaigns launched 2026-08-27 ($9,507, 100% of
+      current TikTok spend). Also fixes `revenue`, which the previously-built
+      version mapped to `total_complete_payment_rate` — a rate, not a value.
+    columns:
+      - name: campaign_id
+        tests: [not_null]
+      - name: date_granularity
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['day', 'week', 'month', 'quarter', 'year']

@@ -1,0 +1,31 @@
+version: 2
+
+sources:
+
+  # The Facebook package does not surface the catalog-segment insight tables,
+  # so they are declared here. Named `facebook_catalog_raw` rather than
+  # `facebook` to avoid colliding with the source the package declares over the
+  # same schema.
+  - name: facebook_catalog_raw
+    schema: facebook_raw
+    description: >
+      Collaborative Ads (CPAS) catalog-segment insights. These are the only
+      place Sephora purchase conversions appear — the Sephora pixel fires on
+      sephora.com, so nothing lands in the Meta account's own purchase columns
+      or in Shopify. Long/EAV format: one row per entity × date × action_type.
+    tables:
+      - name: campaigns_insights_catalog_segment_actions
+        description: "Conversion COUNTS by action_type."
+        columns:
+          - name: action_type
+            description: >
+              Action types NEST — omni_purchase = fb_pixel_purchase +
+              offline_conversion.purchase + app_custom_event.fb_mobile_purchase,
+              and view_content is identical to omni_view_content. NEVER SUM
+              across action_type; always pivot named types.
+      - name: campaigns_insights_catalog_segment_value
+        description: "Conversion VALUES (revenue) by action_type. Same grain and same nesting rule."
+      - name: ads_insights_catalog_segment_actions
+        description: "Ad grain. 845 ads, same 16 action types."
+      - name: ads_insights_catalog_segment_value
+        description: "Ad grain values."
