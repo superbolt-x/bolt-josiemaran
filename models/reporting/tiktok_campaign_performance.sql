@@ -42,4 +42,4 @@ clicks,
 complete_payment as purchases,
 total_complete_payment_rate as revenue,
 web_event_add_to_cart as atc
-FROM FROM {{ ref('tiktok_performance_by_campaign') }}
+FROM {{ ref('tiktok_performance_by_campaign') }}
