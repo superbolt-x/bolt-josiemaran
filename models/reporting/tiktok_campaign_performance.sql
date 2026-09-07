@@ -42,4 +42,4 @@ clicks,
 complete_payment as purchases,
 total_purchase_value as revenue,     -- was: total_complete_payment_rate (a RATE)
 web_event_add_to_cart as atc
-FROM {{ source('jm_reporting', 'josiemaran_tiktok_performance_by_campaign') }}
+FROM FROM {{ ref('tiktok_performance_by_campaign') }}
