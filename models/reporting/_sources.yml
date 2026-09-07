@@ -18,7 +18,7 @@ sources:
   # the same daily job, so ordering holds in practice — but if you ever run our
   # models in isolation against a stale warehouse, they will happily read stale
   # data. `dbt source freshness` is the guard if that becomes a concern.
-  - name: jm_reporting
+  - name: reporting
     schema: reporting
     description: >
       Platform reporting tables built by the packages. Read-only here.
