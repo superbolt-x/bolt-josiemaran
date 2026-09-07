@@ -1,6 +1,5 @@
 {{ config (
-    alias = target.database + '_shopify_sales_by_segment',
-    tags = ['jm_blended']
+    alias = target.database + '_shopify_sales_by_segment'
 )}}
 
 /*

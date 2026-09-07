@@ -1,6 +1,5 @@
 {{ config (
-    alias = target.database + '_blended_performance',
-    tags = ['jm_blended']
+    alias = target.database + '_blended_performance'
 )}}
 
 /*
@@ -52,8 +51,8 @@
   their whole package lineage into every build of ours; one run rebuilt
   facebook_base.facebook_performance_by_campaign_daily (50s),
   shopify_base.shopify_orders and two staging models before reaching this
-  model. Sources are read-only to dbt, so `--select tag:jm_blended` builds
-  exactly four models in seconds.
+  model. Sources are read-only to dbt, so `dbt run --select +blended_performance`
+  builds exactly three models — this one and the two it refs — in seconds.
 
   The columns are derived here rather than borrowed from
   facebook_campaign_performance / googleads_campaign_performance, so this model

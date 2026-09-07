@@ -10,8 +10,8 @@ sources:
   # shopify_base.shopify_orders, _stg_googleads_campaigns_insights and
   # _stg_tiktok_campaigns_insights before it even reached our models.
   #
-  # A source is read-only to dbt: it never builds them, and our four models
-  # run in seconds.
+  # A source is read-only to dbt: it never builds them, so
+  # `dbt run --select +blended_performance` builds three models, not fifteen.
   #
   # TRADE-OFF, worth knowing: because these are sources rather than refs, dbt
   # does not know they must be fresh before ours run. They are built earlier in

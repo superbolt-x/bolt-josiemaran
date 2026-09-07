@@ -1,6 +1,5 @@
 {{ config (
-    alias = target.database + '_facebook_catalog_segment_performance',
-    tags = ['jm_blended']
+    alias = target.database + '_facebook_catalog_segment_performance'
 )}}
 
 /*
