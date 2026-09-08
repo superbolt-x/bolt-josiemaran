@@ -116,7 +116,16 @@ def main(path):
           + ("" if not params else f"  → {params}"))
     if params: fails.append("unbound-macro-arg")
 
-    # 7 — namespacing leaked into a string literal
+    # 7 — correlated subquery. Redshift rejects these with "This type of
+    # correlated subquery pattern is not supported due to internal error" once
+    # there is more than one correlation predicate against a CTE. Use a
+    # LEFT JOIN + sentinel IS NULL anti-join instead.
+    corr = re.findall(r"(?i)\b(?:not\s+)?exists\s*\(", sql)
+    print(f"{'✓' if not corr else '✗'} no EXISTS / NOT EXISTS subquery"
+          + ("" if not corr else f"  → {len(corr)} found"))
+    if corr: fails.append("correlated-subquery")
+
+    # 8 — namespacing leaked into a string literal
     # The compiler prefixes a model's internal CTE names to avoid collisions.
     # If that rewrite touches a string literal it corrupts DATA, not just
     # identifiers — 'google' became 'blended_performance__google' once, which

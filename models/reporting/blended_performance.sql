@@ -398,14 +398,30 @@ ga4_unattached as (
         cast(null as double precision) as shopify_total_sales,
         cast(null as double precision) as shopify_discounts
 
+    /*  Anti-join as LEFT JOIN + IS NULL, not NOT EXISTS. Redshift rejects the
+        correlated form outright — "This type of correlated subquery pattern is
+        not supported due to internal error" — once there is more than one
+        correlation predicate against a CTE.
+
+        `matched` is a sentinel rather than testing p.campaign_id IS NULL: a
+        paid row could itself carry a NULL campaign_id, and then the anti-join
+        marker and the data would be indistinguishable. The DISTINCT keeps the
+        join from multiplying GA4 rows.                                       */
     from ga4 g
-    where not exists (
-        select 1 from paid_union p
-        where p.platform         = g.platform
-          and p.campaign_id      = g.campaign_id
-          and p.date             = g.date
-          and p.date_granularity = g.date_granularity
-    )
+    left join (
+        select distinct
+            platform,
+            campaign_id,
+            date,
+            date_granularity,
+            1 as matched
+        from paid_union
+    ) p
+        on  p.platform         = g.platform
+        and p.campaign_id      = g.campaign_id
+        and p.date             = g.date
+        and p.date_granularity = g.date_granularity
+    where p.matched is null
     group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 
 ),
