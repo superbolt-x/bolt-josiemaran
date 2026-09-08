@@ -1,93 +1,80 @@
-Add blended reporting model with campaign-ID segments
+# Add GA4 as a fourth conversion source; Sunday-anchored weeks; slide-shaped sheet
+## What this adds
 
-## What this does
+**GA4 as a fourth conversion source** on `blended_performance` — `ga4_sessions`,
+`ga4_purchases`, `ga4_revenue`, read straight from `ga4_raw.traffic_sources_session`
+(no reporting model). Channel from `session_source_medium`:
+`metaads / paidsocial` → Meta, `google / cpc` → Google, everything else → `Other`.
+TikTok has no mapping — no DTC TikTok campaigns exist yet.
 
-Builds the automated reporting stack for Josie Maran: a cross-channel blended
-model, Sephora conversions from catalog segment actions, and a single Metabase
-feed card (`JM – Reporting Feed`, [57484](https://metabase-superbolt.com/question/57484))
-that the reporting Gsheet reads.
+**Meta needed a detour.** Google's `session_campaign_id` *is* the campaign id.
+Meta's is `<adset_id>_v2_sNN` — checked against the ad tables, the prefix matches
+`adset_id` on 10,762 rows and `campaign_id` on zero. So Meta needs
+`split_part(_,'_',1)` plus an adset→campaign lookup. Verified: no adset maps to two
+campaigns. Resolves 99.2% of Meta sessions.
 
-Segments are assigned by **campaign ID** (`seeds/campaign_segments.csv`, from the
-reporting deck) rather than parsed from campaign names. The account was inherited
-and carries three incompatible naming conventions, one objective spelled
-`Traffic`/`traffic`/`Traffic-2`, and region as us/US/ca/CA/USA. Unmapped IDs
-resolve to segment `Unmapped` and surface on the Health rows rather than being
-folded into a total.
+GA4 rows that resolve attach to the paid row, so `ga4_roas` works per segment.
+Rows that don't become their own `channel='GA4'` rows via an anti-join. Disjoint
+sets, so it reconciles exactly — week of 2026-08-31: 34,029 Other + 8,820 Google +
+7,276 Meta + 1,372 Unattributed + 16 = **51,513 sessions**, matching the raw table.
 
-```
-Google Overall + Meta Overall = Paid DTC Overall   (in_dtc_overall flag)
-Sephora US/CA Traffic · Sephora US/CA Collab · Sephora @ Kohls
-```
+Expect `paid_roas` and `ga4_roas` to disagree: Meta Overall is 0.73 GA4 ROAS that
+week, Google Overall 4.06. One is view-through-windowed, the other last-non-direct
+session. The model header says never to add them.
 
-## New models
+## Weeks
 
-| Model | What |
-|---|---|
-| `blended_performance` | cross-channel fact table (Meta, Google, TikTok, Shopify) |
-| `facebook_catalog_segment_performance` | Sephora conversions, pivoted out of the EAV raw tables |
-| `tiktok_campaign_performance` | campaign grain, from the package base model |
-| `shopify_sales_by_segment` | site sales carrying market + order_type |
+`week_start: 'Sunday'` is deliberate — the client asked for it and the packages
+honour it. `jm_week_start()` now reads that var rather than hard-coding the anchor,
+so flipping `dbt_project.yml` moves our derived weeks and the packages' together.
+Without it, Redshift's `date_trunc('week', d)` returns the ISO Monday and the
+blended table ends up with two sets of week dates — no error, every weekly number
+silently halved.
 
-**Why catalog segment actions matter.** Sephora sells on sephora.com, so purchases
-fire on Sephora's pixel against Sephora's catalog segment — nothing lands in Meta's
-own purchase columns or in Shopify. Read on `purchases`, the Sephora account shows
-18 purchases on $566,802 of 2026 spend; on catalog segment actions it has driven
-6,797 purchases and $274,382 since March 2025. The action types **nest**
-(`omni_purchase` = web + in-store + app), so a naive `SUM` over `action_type`
-returns 5,599,760 against a true 6,797 — the model pivots named types so that
-mistake is unavailable downstream.
+The macro is only for the three sources that arrive **daily with no
+`date_granularity`**: order-level Shopify, the Facebook catalog-segment EAV tables,
+GA4 sessions. Anything already carrying `date_granularity` is read by **filtering
+that column**. `date_trunc` survives only in the card's two date-range filters.
 
-## Fixes
+Verified against the warehouse: package weeks and all three derived weeks land on
+the same Sundays (08-02 → 09-06).
 
-- **`tiktok_campaign_performance`** — `revenue` was `total_complete_payment_rate`,
-  a rate, not a currency amount. Also reads campaign grain because the ad-grain
-  join returns NULL `campaign_id` for both campaigns launched 2026-08-27
-  ($9,507, all current TikTok spend), which made an ID join impossible.
-- **`facebook_campaign_performance`** — the `account` CASE returned NULL for any
-  account id outside the two hard-coded values.
-- **`bingads_*`, `pinterest_*`, `googleads_ad_performance`** — set
-  `enabled = false`; not live, no table in the warehouse.
+## Report window
 
-`googleads_campaign_performance` keeps `conversions`/`conversions_value`. An
-earlier draft remapped them on a 1.50x-of-store-orders reading; that ratio came
-from a window including four months where Google was spending against Shopify
-order data that had not yet synced. On August alone it is 0.24x store orders and
-1,091% ROAS, matching the deliberate 1,000% tROAS.
+The card supplies 7 weeks / 3 months; the sheet reads the last 2 for KPI tables and
+4 for charts. Changing the window is now a constant in the Apps Script, not a SQL
+edit.
 
-## Tests
+## Generated, not hand-edited
 
-| Test | Expected |
-|---|---|
-| `assert_sephora_spend_has_catalog_segment` | **FAILS** — ~91% of live Sephora spend has no catalog feedback. Clears when the SB traffic campaigns are added to the catalog partnership, not by editing the test. |
-| `assert_no_unmapped_live_spend` | passes (7-day window) |
-| `assert_no_null_campaign_id` | passes |
+`metabase/01_reporting_feed.sql` now comes from `scripts/gen_reporting_feed.py`.
+Every level emits 25 columns twice (week + month); hand-patching GA4 in matched the
+week branch and missed the month branch on four of five levels, because the
+surrounding text differs by `from wk` vs `from mo`. Symptom would have been GA4
+absent from every MTD number with no error.
 
-Health and test windows are 7 days, not 30: the nine predecessors of the current
-structure all stopped spending by 2026-08-27, so a 30-day window reports $44,184
-of correctly-unmapped retired spend and fails through the whole transition. From
-the week of 2026-08-31 the mapping covers 100% of spend.
+## Sheet layout matches the deck
 
-## Tooling
+Each slide gets its own block: metrics down the rows, two date columns + % change,
+then a 4-period chart-data table. Five metric shapes across seven tabs.
 
-- `scripts/gen_segment_macro.py` — CSV → macro, so the mapping needs no `dbt seed`
-- `scripts/build_standalone_feed.py` — compiles the models into one query over the
-  tables that exist today, so the sheet can be wired up before dbt runs
-- `scripts/validate_sql.py` — static checks on the generated SQL
-- `scripts/build_gsheet.gs` — Apps Script that builds every sheet tab
+Sephora Traffic deliberately carries no conversion rows — those campaigns emit no
+catalog-segment data, so there is no honest figure, and blank rows would invite
+someone to fill them from the wrong column.
 
-## What the mapping shows
+## Left alone
 
-Week of 2026-08-31: Traffic is $20,096 of $21,999 Sephora spend and produces **no**
-catalog-segment conversions — the campaigns now defined as Traffic are the new SB
-ones (no catalog linkage) plus TikTok (no conversion data of any kind). Collab is
-$1,197 and produced **all 145** measured purchases, at 4.82 and 4.64 ROAS.
+Both TikTok models keep `total_complete_payment_rate as revenue` and `atc`.
+`blended_performance` reads neither — it sources the base table and derives revenue
+from `total_purchase_value` itself, so they cannot disagree.
 
-## Known constraint
+## Also
 
-DTC blended metrics are only valid from the week of 2026-07-27 — Shopify order
-history begins there (19 orders the week before, 2,737 that week). August 2026 is
-the only complete month, so no blended MoM until October and no blended YoY this
-year. Sephora is the opposite: 18 months of catalog-segment history. Every card
-carries a `data_valid` flag and the sheet greys those cells.
+Fixed a compile breaker from the `jm_reporting` → `reporting` rename (the
+`facebook_performance_by_ad` source was missed). Fixed two compiler bugs found while
+verifying: CTE namespacing rewriting inside string literals (would have made every
+campaign `Unmapped` silently), and nested macro args not being bound (emitted SQL
+referencing a column called `date_col`). Both now have `validate_sql.py` checks,
+each verified by injecting the bug.
 
-Full detail in `docs/RUNBOOK.md`.
+Run with `dbt run --select +blended_performance` — 3 models, no package rebuild.
