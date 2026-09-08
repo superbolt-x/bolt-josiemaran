@@ -50,8 +50,70 @@ mo as (
     select *
     from reporting.josiemaran_blended_performance
     where date_granularity = 'month'
-      and date >= date_trunc('month', current_date) - interval '3 month'
+      and date >= date_trunc('month', current_date) - interval '4 month'
       and date <  date_trunc('month', current_date)
+),
+
+md as (
+    /*  Genuine month-to-date, on a LIKE-FOR-LIKE window.
+
+        `mo` deliberately excludes the month in progress, so a tab called MTD
+        was really showing the last two COMPLETE months — August beside July.
+        And putting a partial September next to a whole August would have made
+        the % change meaningless anyway (7 days against 31).
+
+        So MTD is built from day rows instead: this month through the last
+        COMPLETE day (current_date - 1; today is still filling), and the same
+        number of days of the previous month. Both rows are stamped with their
+        own month start, so the sheet's newest/previous pair reads Sep 1-7 vs
+        Aug 1-7 — two windows of equal length.
+
+        On the 1st of a month the current window is empty, which is correct:
+        there is no month-to-date yet.
+
+        Aggregating from day grain is safe here because every ratio in this card
+        is computed from summed numerators and denominators further down, never
+        averaged from a pre-computed rate.                                    */
+    select
+        channel,
+        segment,
+        business_line,
+        in_dtc_overall,
+        market,
+        order_type,
+        campaign_id,
+        campaign_name,
+        date_trunc('month', date)::date         as date,
+        'mtd'                                   as date_granularity,
+        spend,
+        impressions,
+        clicks,
+        paid_purchases,
+        paid_revenue,
+        paid_add_to_cart,
+        cs_purchases,
+        cs_revenue,
+        cs_offline_purchases,
+        cs_add_to_cart,
+        ga4_sessions,
+        ga4_purchases,
+        ga4_revenue,
+        shopify_orders,
+        shopify_first_orders,
+        shopify_repeat_orders,
+        shopify_new_customers,
+        shopify_gross_sales,
+        shopify_total_sales,
+        shopify_discounts
+    from reporting.josiemaran_blended_performance
+    where date_granularity = 'day'
+      and (
+              (    date >= date_trunc('month', current_date)::date
+               and date <= current_date - 1 )
+           or (    date >= date_trunc('month', current_date - interval '1 month')::date
+               and date <= date_trunc('month', current_date - interval '1 month')::date
+                           + (date_part(day, current_date - 1)::int - 1) )
+          )
 ),
 
 dtc_segment as (
@@ -121,6 +183,41 @@ dtc_segment as (
         cast(null as varchar(8))                as status,
         cast(null as varchar(256))              as detail
     from mo
+    where business_line = 'DTC'
+      and (in_dtc_overall or channel = 'Shopify')
+    group by grouping sets ((date), (date, segment))
+    having sum(spend) > 0 or sum(shopify_orders) > 0
+
+    union all
+
+    select
+        'DTC Segment'                           as report_level,
+        case when grouping(segment) = 1 then 'Paid DTC Overall'
+             else segment end                   as row_label,
+        'All'                                  as market,
+        'mtd'                                  as grain,
+        date                                    as period_start,
+        grouping(segment)                       as is_rollup,
+        case when grouping(segment) = 1 then 'blended_*' else 'paid_*' end as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from md
     where business_line = 'DTC'
       and (in_dtc_overall or channel = 'Shopify')
     group by grouping sets ((date), (date, segment))
@@ -202,6 +299,42 @@ sephora_segment as (
     group by grouping sets ((date), (date, market), (date, segment))
     having sum(spend) > 0
 
+    union all
+
+    select
+        'Sephora Segment'                       as report_level,
+        case when grouping(segment) = 1 and grouping(market) = 0
+                  then 'Sephora – ' || market
+             when grouping(segment) = 1 then 'Sephora – Total'
+             else segment end                   as row_label,
+        coalesce(market, 'All')                                  as market,
+        'mtd'                                  as grain,
+        date                                    as period_start,
+        grouping(segment)                       as is_rollup,
+        'cs_*' as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        sum(cs_purchases)                       as cs_purchases,
+        sum(cs_revenue)                         as cs_revenue,
+        sum(cs_offline_purchases)               as cs_offline_purchases,
+        sum(cs_add_to_cart)                     as cs_add_to_cart,
+        cast(null as bigint)                    as ga4_sessions,
+        cast(null as double precision)          as ga4_purchases,
+        cast(null as double precision)          as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from md
+    where business_line = 'Sephora'
+    group by grouping sets ((date), (date, market), (date, segment))
+    having sum(spend) > 0
+
 ),
 
 campaign as (
@@ -268,6 +401,40 @@ campaign as (
         cast(null as varchar(8))                as status,
         cast(null as varchar(256))              as detail
     from mo
+    where channel not in ('Shopify', 'GA4')
+      and campaign_id is not null
+    group by campaign_id, campaign_name, market, date, business_line, segment
+    having sum(spend) > 0
+
+    union all
+
+    select
+        'Campaign'                              as report_level,
+        campaign_id || '  ·  ' || coalesce(campaign_name, '(no name)')                   as row_label,
+        market                                  as market,
+        'mtd'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        case when business_line = 'Sephora' then 'cs_*' else 'paid_*' end as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        sum(cs_purchases)                       as cs_purchases,
+        sum(cs_revenue)                         as cs_revenue,
+        sum(cs_offline_purchases)               as cs_offline_purchases,
+        sum(cs_add_to_cart)                     as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from md
     where channel not in ('Shopify', 'GA4')
       and campaign_id is not null
     group by campaign_id, campaign_name, market, date, business_line, segment
@@ -344,6 +511,39 @@ ga4_channel as (
     group by segment, date
     having sum(ga4_sessions) > 0
 
+    union all
+
+    select
+        'GA4 Channel'                           as report_level,
+        segment                   as row_label,
+        'All'                                  as market,
+        'mtd'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        'ga4_*' as read_metrics,
+        cast(null as double precision)          as spend,
+        cast(null as bigint)                    as impressions,
+        cast(null as double precision)          as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from md
+    where channel = 'GA4'
+    group by segment, date
+    having sum(ga4_sessions) > 0
+
 ),
 
 site as (
@@ -410,6 +610,39 @@ site as (
         cast(null as varchar(8))                as status,
         cast(null as varchar(256))              as detail
     from mo
+    where channel = 'Shopify'
+    group by grouping sets ((date), (date, order_type), (date, market))
+    having sum(shopify_orders) > 0
+
+    union all
+
+    select
+        'Site'                                  as report_level,
+        coalesce(order_type, 'All')                   as row_label,
+        coalesce(market, 'All')                                  as market,
+        'mtd'                                  as grain,
+        date                                    as period_start,
+        grouping(order_type)                       as is_rollup,
+        'site_*' as read_metrics,
+        cast(null as double precision)          as spend,
+        cast(null as bigint)                    as impressions,
+        cast(null as double precision)          as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        cast(null as bigint)                    as ga4_sessions,
+        cast(null as double precision)          as ga4_purchases,
+        cast(null as double precision)          as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from md
     where channel = 'Shopify'
     group by grouping sets ((date), (date, order_type), (date, market))
     having sum(shopify_orders) > 0
@@ -564,13 +797,23 @@ select
     -- "2026-W35" and read as the week before. The deck calls it 8/30/2026.
     case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
                when 'month' then to_char(period_start, 'YYYY-MM')
+               -- both MTD rows cover days 1..n, so one suffix describes each
+               when 'mtd'   then to_char(period_start, 'FMMon')
+                                 || ' 1-' || date_part(day, current_date - 1)::int::varchar
                else '' end                                      as period_label,
     period_start,
     read_metrics,
 
-    report_level || '|' || row_label || '|' || market || '|' ||
-        case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
+    report_level || '|' || row_label || '|' || market || '|' || grain || '|' ||
+        -- lookup_key uses ISO dates, NOT the display label. Google Sheets
+        -- auto-parses '2026-08' and '8/23/2026' into date serials on write, so
+        -- a sheet formula rebuilding the key from a header cell produced
+        -- '...|46235' and matched nothing — every MTD metric came back blank.
+        -- ISO is what TEXT(cell,"yyyy-mm-dd") yields on the sheet side, so the
+        -- two agree whether Sheets stored the header as text or as a date.
+        case grain when 'week'  then to_char(period_start, 'YYYY-MM-DD')
                    when 'month' then to_char(period_start, 'YYYY-MM')
+                   when 'mtd'   then to_char(period_start, 'YYYY-MM')
                    else '' end                                  as lookup_key,
 
     -- ── Delivery ───────────────────────────────────────────────────────────
@@ -629,7 +872,7 @@ select
         when report_level = 'Health'          then true
         when report_level = 'Sephora Segment' then period_start >= '2025-03-01'
         when report_level = 'GA4 Channel'     then period_start >= '2024-08-17'
-        when grain = 'month'                   then period_start >= '2026-08-01'
+        when grain in ('month', 'mtd')         then period_start >= '2026-08-01'
         else period_start >= '2026-07-27'
     end                                                          as data_valid,
 

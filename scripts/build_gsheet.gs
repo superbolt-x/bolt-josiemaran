@@ -7,16 +7,27 @@
  * Each slide carries a WoW table with metrics down the rows and exactly TWO
  * date columns plus % change, and a "Spend vs ROAS" chart. So that is what
  * this builds: one KPI block per segment, metrics as rows, 2 periods + delta,
- * followed by a 4-period chart-data block the Sheets chart points at.
+ * and a real combo chart over the last 4 periods beside it.
  *
  * The feed supplies 7 weeks and 3 months. The KPI block reads the last 2 and
- * the chart block the last 4 — the filtering happens here, not in the card, so
+ * the chart the last 4 — the filtering happens here, not in the card, so
  * changing the report window never means editing SQL.
  *
- * ── FEED TAB ────────────────────────────────────────────────────────────────
- * The extension appends the question id, so the tab is `feed @ 57484`. The name
- * has a space and an `@`, so it has to be quoted in every formula. FEED_REF
- * does that once — change FEED if the question id changes, nothing else.
+ * ── PERIODS ARE HANDLED AS DATES, NEVER AS LABEL TEXT ───────────────────────
+ * This is the one thing in this file worth reading twice.
+ *
+ * Google Sheets auto-parses anything date-shaped on write. A period label of
+ * '2026-08' became the serial 46235, and '8/23/2026' likewise. So a formula
+ * that rebuilt the lookup key from a header cell produced
+ *   "DTC Segment|Paid DTC Overall|All|46235"
+ * while the card emitted "...|2026-08" — no match, every metric silently blank.
+ * That was the empty MTD tab.
+ *
+ * The fix: header cells read period_start (column F, a genuine date), and the
+ * key is rebuilt with TEXT(...) in the same ISO shape the card emits. Coercion
+ * is now harmless — the cell is *supposed* to be a date — and the header can be
+ * number-formatted for the client (8/23/2026, Aug 2026) with no effect on
+ * matching. Never point a lookup at column E; it is display text only.
  *
  * ── FOUR CONVERSION SOURCES, NONE INTERCHANGEABLE ───────────────────────────
  * Column G (read_metrics) says which family applies to a row:
@@ -30,12 +41,28 @@
 var FEED     = 'feed @ 57484';
 var FEED_REF = "'" + FEED + "'";
 var COLS     = '$A:$AV';        // 48 columns
+var PSTART   = '$F:$F';         // period_start — the date the lookups key on
 var KEY      = '$H:$H';         // lookup_key
 var VALID    = '$AS:$AS';       // data_valid
 var FEEDBACK = '$AT:$AT';       // has_catalog_feedback
 
 var KPI_PERIODS   = 2;          // the slide's WoW table
 var CHART_PERIODS = 4;          // the slide's chart
+
+// How a period is displayed, and how it is written into the lookup key. The
+// key half MUST match the card's lookup_key exactly (gen_reporting_feed.py).
+// `fmt` is a Sheets number format (lowercase m = month). `hfmt` is the ICU
+// pattern Google Charts wants for the same thing — there, lowercase m means
+// MINUTES, so the two cannot be shared.
+var GRAIN = {
+  week:  { fmt: 'm/d/yyyy', hfmt: 'M/d',      key: 'yyyy-mm-dd', noun: 'weeks',  col: 'Week'  },
+  month: { fmt: 'mmm yyyy', hfmt: 'MMM yyyy', key: 'yyyy-mm',    noun: 'months', col: 'Month' },
+  // Month-to-date: two windows of equal length, this month and last, both
+  // running day 1 to the last complete day. Keyed on the month start, which is
+  // why `grain` has to be in the lookup key — 'month' and 'mtd' both key on
+  // yyyy-mm, and without it a MATCH would return whichever row came first.
+  mtd:   { fmt: 'mmm yyyy', hfmt: 'MMM yyyy', key: 'yyyy-mm',    noun: 'months', col: 'Month' }
+};
 
 // Metric sets, one per slide shape. Order is the order on the slide.
 var SHAPES = {
@@ -112,46 +139,49 @@ var SHAPES = {
   }
 };
 
-// One entry per slide. `level` + `row` + `market` build the lookup key.
+// One entry per slide: [row_label, report_level, market].
 var TABS = {
   'DTC WoW': { shape: 'dtc', grain: 'week', slides: [
-    ['Paid DTC Overall', 'DTC Segment', 'All', 3.50],
-    ['Meta Overall',     'DTC Segment', 'All', 2.50],
-    ['Google Overall',   'DTC Segment', 'All', 10.00]
+    ['Paid DTC Overall', 'DTC Segment', 'All'],
+    ['Meta Overall',     'DTC Segment', 'All'],
+    ['Google Overall',   'DTC Segment', 'All']
   ]},
   'Sephora Traffic WoW': { shape: 'sephoraTraffic', grain: 'week', slides: [
-    ['Sephora US Traffic', 'Sephora Segment', 'All', ''],
-    ['Sephora CA Traffic', 'Sephora Segment', 'All', ''],
-    ['Sephora @ Kohls',    'Sephora Segment', 'All', '']
+    ['Sephora US Traffic', 'Sephora Segment', 'All'],
+    ['Sephora CA Traffic', 'Sephora Segment', 'All'],
+    ['Sephora @ Kohls',    'Sephora Segment', 'All']
   ]},
   'Sephora Collab WoW': { shape: 'sephoraCollab', grain: 'week', slides: [
-    ['Sephora US Collab', 'Sephora Segment', 'All', 1.50],
-    ['Sephora CA Collab', 'Sephora Segment', 'All', 2.50],
-    ['Sephora – Total',   'Sephora Segment', 'All', '']
+    ['Sephora US Collab', 'Sephora Segment', 'All'],
+    ['Sephora CA Collab', 'Sephora Segment', 'All'],
+    ['Sephora – Total',   'Sephora Segment', 'All']
   ]},
   'Site': { shape: 'site', grain: 'week', slides: [
-    ['All',          'Site', 'All', ''],
-    ['Web',          'Site', 'All', ''],
-    ['Subscription', 'Site', 'All', '']
+    ['All',          'Site', 'All'],
+    ['Web',          'Site', 'All'],
+    ['Subscription', 'Site', 'All']
   ]},
   'GA4 Channels': { shape: 'ga4', grain: 'week', slides: [
-    ['Other',             'GA4 Channel', 'All', ''],
-    ['Unattributed Paid', 'GA4 Channel', 'All', '']
+    ['Other',             'GA4 Channel', 'All'],
+    ['Unattributed Paid', 'GA4 Channel', 'All']
   ]},
-  'MTD': { shape: 'dtc', grain: 'month', slides: [
-    ['Paid DTC Overall', 'DTC Segment', 'All', ''],
-    ['Meta Overall',     'DTC Segment', 'All', ''],
-    ['Google Overall',   'DTC Segment', 'All', '']
+  // KPI table = MTD vs the same days of last month. Chart = the last 4 COMPLETE
+  // months, because an mtd grain only ever holds two points.
+  'MTD': { shape: 'dtc', grain: 'mtd', chartGrain: 'month', slides: [
+    ['Paid DTC Overall', 'DTC Segment', 'All'],
+    ['Meta Overall',     'DTC Segment', 'All'],
+    ['Google Overall',   'DTC Segment', 'All']
   ]},
-  'MTD Sephora': { shape: 'sephoraCollab', grain: 'month', slides: [
-    ['Sephora – Total',   'Sephora Segment', 'All', ''],
-    ['Sephora US Collab', 'Sephora Segment', 'All', ''],
-    ['Sephora CA Collab', 'Sephora Segment', 'All', '']
+  'MTD Sephora': { shape: 'sephoraCollab', grain: 'mtd', chartGrain: 'month', slides: [
+    ['Sephora – Total',   'Sephora Segment', 'All'],
+    ['Sephora US Collab', 'Sephora Segment', 'All'],
+    ['Sephora CA Collab', 'Sephora Segment', 'All']
   ]}
 };
 
-var C = { header:'#14201e', headerT:'#f6f5f0', block:'#efede5', amber:'#f4e9cf',
-          amberT:'#8a6412', grey:'#eeeeee', greyT:'#999999', note:'#66756f' };
+var C = { header:'#14201e', headerT:'#f6f5f0', block:'#f8f6f2', rule:'#e2ded4',
+          amber:'#f4e9cf', amberT:'#8a6412', grey:'#eeeeee', greyT:'#999999',
+          note:'#66756f', bar:'#14201e', line:'#c0703a' };
 
 function buildReport() {
   var ss = SpreadsheetApp.getActive();
@@ -167,7 +197,13 @@ function buildReport() {
 function sheet_(ss, name, wipe) {
   var sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
-  else if (wipe) { sh.clear(); sh.clearConditionalFormatRules(); }
+  else if (wipe) {
+    sh.clear();
+    sh.clearConditionalFormatRules();
+    // clear() leaves embedded charts behind, so a rebuild would stack a fresh
+    // set on top of the old ones.
+    sh.getCharts().forEach(function (ch) { sh.removeChart(ch); });
+  }
   return sh;
 }
 
@@ -184,35 +220,58 @@ function ensureFeedTab_(ss) {
 }
 
 /**
- * Period label, counted back from the newest the feed holds.
- * offset 0 = newest. The feed carries 7 weeks / 3 months; the KPI block asks
- * for 2 and the chart for 4, so the window lives here rather than in the SQL.
+ * period_start, counted back from the newest the feed holds. offset 0 = newest.
+ * Reads column F (a date), NOT column E (display text) — see the header note.
  */
 function periodAt_(level, grain, offsetFromNewest) {
-  return '=IFERROR(INDEX(SORT(UNIQUE(FILTER(' + FEED_REF + '!$E:$E,' +
+  return '=IFERROR(INDEX(SORT(UNIQUE(FILTER(' + FEED_REF + '!' + PSTART + ',' +
          ' ' + FEED_REF + '!$A:$A="' + level + '", ' + FEED_REF + '!$D:$D="' + grain + '",' +
-         ' ' + FEED_REF + '!$E:$E<>"")),1,FALSE), ' + (offsetFromNewest + 1) + '), "")';
+         ' ' + FEED_REF + '!' + PSTART + '<>"")),1,FALSE), ' + (offsetFromNewest + 1) + '), "")';
+}
+
+/**
+ * The lookup key, exactly as the card builds it:
+ *   report_level | row_label | market | grain | period
+ * The period half comes off a date cell, rendered in the shape the card emits.
+ */
+function key_(level, row, market, grain, cellRef) {
+  return '"' + level + '|' + row + '|' + market + '|' + grain + '|"&' +
+         'TEXT(' + cellRef + ',"' + GRAIN[grain].key + '")';
 }
 
 /** One metric for one row/period. Row by lookup_key, metric BY HEADER NAME. */
-function cell_(level, row, market, periodRef, metric) {
+function cell_(level, row, market, cellRef, grain, metric) {
   return '=IFERROR(INDEX(' + FEED_REF + '!' + COLS + ',' +
-         ' MATCH("' + level + '|' + row + '|' + market + '|"&' + periodRef + ',' +
+         ' MATCH(' + key_(level, row, market, grain, cellRef) + ',' +
          ' ' + FEED_REF + '!' + KEY + ', 0),' +
          ' MATCH("' + metric + '", ' + FEED_REF + '!$1:$1, 0)), "")';
 }
 
 function buildTab_(ss, name, cfg) {
   var shape = SHAPES[cfg.shape];
-  var sh = sheet_(ss, name, true);
-  var isWeek = cfg.grain === 'week';
+  var g     = GRAIN[cfg.grain];
+  var cg    = cfg.chartGrain || cfg.grain;   // MTD tables chart complete months
+  var gc    = GRAIN[cg];
+  var sh    = sheet_(ss, name, true);
 
   sh.getRange(1, 1).setValue(name).setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
   sh.getRange(1, 1, 1, 5).setBackground(C.header);
   sh.getRange('A2').setValue('Data through:');
-  sh.getRange('B2').setFormula('=IFERROR(TEXT(MAX(FILTER(' + FEED_REF + '!$F:$F, ' +
+  sh.getRange('B2').setFormula('=IFERROR(TEXT(MAX(FILTER(' + FEED_REF + '!' + PSTART + ', ' +
     FEED_REF + '!$A:$A="' + cfg.slides[0][1] + '", ' + FEED_REF + '!$D:$D="' + cfg.grain +
     '")),"yyyy-mm-dd"),"— connect feed —")');
+  if (cfg.grain === 'mtd') {
+    // The header cells must hold dates (the lookup key is rebuilt from them),
+    // so they can only render 'Sep 2026' — which hides that the window is 7
+    // days, not a month. period_label carries the real span; nothing matches on
+    // it, so it is safe to display verbatim.
+    sh.getRange('D2').setFormula(
+      '=IFERROR("Comparing "&TEXTJOIN(" vs ", TRUE, SORT(UNIQUE(FILTER(' +
+      FEED_REF + '!$E:$E, ' + FEED_REF + '!$A:$A="' + cfg.slides[0][1] + '", ' +
+      FEED_REF + '!$D:$D="mtd", ' + FEED_REF + '!$E:$E<>"")), 1, FALSE))&' +
+      '" — equal-length windows, through the last complete day.", "")')
+      .setFontColor(C.note).setFontStyle('italic');
+  }
   sh.getRange('A3').setValue('Health:');
   sh.getRange('B3').setFormula('=COUNTIF(' + FEED_REF + '!$AU:$AU,"FAIL")&" checks failing"')
     .setFontColor(C.amberT);
@@ -220,22 +279,27 @@ function buildTab_(ss, name, cfg) {
 
   var row = 5;
   cfg.slides.forEach(function (sl) {
-    var label = sl[0], level = sl[1], market = sl[2], target = sl[3];
+    var label = sl[0], level = sl[1], market = sl[2];
+    var blockTop = row;
 
     // ── slide title ────────────────────────────────────────────────────────
-    sh.getRange(row, 1, 1, 4).setBackground(C.block);
-    sh.getRange(row, 1).setValue(label + (target !== '' ? '     target ROAS ≥ ' + target : ''))
-      .setFontWeight('bold');
+    sh.getRange(row, 1, 1, 2 + KPI_PERIODS).setBackground(C.block);
+    sh.getRange(row, 1).setValue(label).setFontWeight('bold');
     row++;
 
     // ── KPI table: metrics as rows, oldest→newest, then % change ───────────
     var hdr = row;
-    sh.getRange(row, 1).setValue('Date').setFontWeight('bold');
+    sh.getRange(row, 1).setValue(cfg.grain === 'mtd' ? 'Month to date' : 'Date')
+      .setFontWeight('bold');
     for (var k = KPI_PERIODS - 1; k >= 0; k--) {
-      sh.getRange(row, 1 + (KPI_PERIODS - k)).setFormula(periodAt_(level, cfg.grain, k));
+      sh.getRange(row, 1 + (KPI_PERIODS - k))
+        .setFormula(periodAt_(level, cfg.grain, k))
+        .setNumberFormat(g.fmt);
     }
     sh.getRange(row, 2 + KPI_PERIODS).setValue('% change').setFontWeight('bold');
-    sh.getRange(row, 1, 1, 2 + KPI_PERIODS).setFontWeight('bold').setBackground(C.block);
+    sh.getRange(row, 1, 1, 2 + KPI_PERIODS)
+      .setFontWeight('bold').setBackground(C.block)
+      .setBorder(null, null, true, null, null, null, C.rule, SpreadsheetApp.BorderStyle.SOLID);
     row++;
 
     var first = row;
@@ -244,7 +308,7 @@ function buildTab_(ss, name, cfg) {
       for (var k = KPI_PERIODS - 1; k >= 0; k--) {
         var col = 1 + (KPI_PERIODS - k);
         sh.getRange(row, col).setFormula(
-          cell_(level, label, market, colLetter_(col) + '$' + hdr, m[1]))
+          cell_(level, label, market, colLetter_(col) + '$' + hdr, cfg.grain, m[1]))
           .setNumberFormat(m[2]);
       }
       var older = colLetter_(2), newer = colLetter_(1 + KPI_PERIODS);
@@ -262,8 +326,9 @@ function buildTab_(ss, name, cfg) {
         var fc = 1 + (KPI_PERIODS - k);
         sh.getRange(flagRow, fc).setFormula(
           '=IFERROR(INDEX(' + FEED_REF + '!' + shape.flag + ',' +
-          ' MATCH("' + level + '|' + label + '|' + market + '|"&' +
-          colLetter_(fc) + '$' + hdr + ', ' + FEED_REF + '!' + KEY + ', 0)), TRUE)');
+          ' MATCH(' + key_(level, label, market, cfg.grain,
+                           colLetter_(fc) + '$' + hdr) + ', ' +
+          FEED_REF + '!' + KEY + ', 0)), TRUE)');
       }
       sh.hideRows(flagRow);
       addFlagRule_(sh, shape, first, shape.metrics.length, flagRow);
@@ -271,24 +336,26 @@ function buildTab_(ss, name, cfg) {
     }
     row++;
 
-    // ── chart data: CHART_PERIODS periods, oldest → newest ─────────────────
-    sh.getRange(row, 1).setValue('Chart data  ·  ' + CHART_PERIODS +
-      (isWeek ? ' weeks' : ' months')).setFontSize(9).setFontColor(C.note);
+    // ── chart data + the chart itself ──────────────────────────────────────
+    sh.getRange(row, 1).setValue('Chart data  ·  last ' + CHART_PERIODS + ' complete ' + gc.noun)
+      .setFontSize(9).setFontColor(C.note);
     row++;
     var chdr = row;
-    sh.getRange(row, 1).setValue(isWeek ? 'Week' : 'Month').setFontWeight('bold');
+    sh.getRange(row, 1).setValue(gc.col).setFontWeight('bold');
     shape.chart.forEach(function (m, i) { sh.getRange(row, 2 + i).setValue(m[0]).setFontWeight('bold'); });
     row++;
     for (var k = CHART_PERIODS - 1; k >= 0; k--) {
-      sh.getRange(row, 1).setFormula(periodAt_(level, cfg.grain, k));
+      sh.getRange(row, 1).setFormula(periodAt_(level, cg, k)).setNumberFormat(gc.fmt);
       shape.chart.forEach(function (m, i) {
         sh.getRange(row, 2 + i)
-          .setFormula(cell_(level, label, market, '$A' + row, m[1]))
+          .setFormula(cell_(level, label, market, '$A' + row, cg, m[1]))
           .setNumberFormat(m[2]);
       });
       row++;
     }
-    sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length).setBorder(true, true, true, true, true, true);
+    sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length)
+      .setBorder(true, true, true, true, true, true, C.rule, SpreadsheetApp.BorderStyle.SOLID);
+    addChart_(sh, shape, label, gc, chdr, blockTop);
     row += 2;
   });
 
@@ -301,6 +368,42 @@ function buildTab_(ss, name, cfg) {
   sh.setColumnWidth(1, 150);
   for (var c = 2; c <= 2 + KPI_PERIODS; c++) sh.setColumnWidth(c, 105);
   sh.setFrozenColumns(1);
+  sh.setHiddenGridlines(true);
+}
+
+/**
+ * The deck's "Spend vs ROAS" chart, for real: first chart metric as columns on
+ * the left axis, second as a line on the right. Two axes because spend is in
+ * thousands and ROAS is around 1 — on one axis the line would sit flat on zero.
+ *
+ * Anchored beside its own block (column F) so each chart travels with the table
+ * it belongs to. Charts are removed and rebuilt on every run.
+ */
+function addChart_(sh, shape, label, g, chdr, anchorRow) {
+  var bar = shape.chart[0], line = shape.chart[1];
+  var chart = sh.newChart().asComboChart()
+    .addRange(sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length))
+    .setOption('title', label + ' — ' + bar[0] + ' vs ' + line[0])
+    .setOption('titleTextStyle', { color: C.header, fontSize: 12, bold: true })
+    .setOption('seriesType', 'bars')
+    .setOption('series', {
+      0: { type: 'bars', targetAxisIndex: 0, color: C.bar },
+      1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6 }
+    })
+    .setOption('vAxes', {
+      0: { title: bar[0],  format: bar[2].indexOf('$') === 0 ? 'currency' : 'short' },
+      1: { title: line[0], format: line[2].indexOf('$') === 0 ? 'currency' : 'short',
+           gridlines: { count: 0 } }
+    })
+    .setOption('hAxis', { title: g.col, format: g.hfmt, slantedText: false })
+    .setOption('legend', { position: 'bottom' })
+    .setOption('backgroundColor', '#ffffff')
+    .setOption('chartArea', { left: 60, right: 60, top: 40, width: '76%', height: '62%' })
+    .setOption('width', 460)
+    .setOption('height', 260)
+    .setPosition(anchorRow, 6, 0, 0)
+    .build();
+  sh.insertChart(chart);
 }
 
 /**
@@ -328,13 +431,15 @@ function buildCampaigns_(ss) {
   sh.getRange('A1').setValue('Campaigns').setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
   sh.getRange('A1:I1').setBackground(C.header);
   sh.getRange('A2').setValue('Week:');
-  sh.getRange('B2').setFormula(periodAt_('Campaign', 'week', 0));
+  sh.getRange('B2').setFormula(periodAt_('Campaign', 'week', 0)).setNumberFormat(GRAIN.week.fmt);
   sh.getRange('A3').setValue('read_metrics says which family applies: Sephora rows use cs_*, DTC rows use paid_*.')
     .setFontColor(C.note).setFontSize(9);
+  // Filters on F (the date) rather than E (display text) — QUERY needs a real
+  // date literal, and B2 is a date, so TEXT() puts it in the shape QUERY wants.
   sh.getRange('A5').setFormula(
     '=IFERROR(QUERY(' + FEED_REF + '!' + COLS + ',' +
     ' "select B, C, G, I, O, Q, X, AB, AD' +
-    '   where A = \'Campaign\' and D = \'week\' and E = \'"&$B$2&"\'' +
+    '   where A = \'Campaign\' and D = \'week\' and F = date \'"&TEXT($B$2,"yyyy-mm-dd")&"\'' +
     '   order by I desc' +
     '   label B \'Campaign\', C \'Market\', G \'Read\', I \'Spend\', O \'Paid purch\',' +
     ' Q \'Paid ROAS\', X \'GA4 ROAS\', AB \'cs purch\', AD \'cs ROAS\'", 1),' +
@@ -373,9 +478,16 @@ function writeReadme_(ss) {
     ['48 columns A:AV. Never edit, sort or format that tab.'],
     [''],
     ['LAYOUT MATCHES THE DECK. Each block is one slide: metrics down the rows,'],
-    ['two date columns plus % change, then a ' + CHART_PERIODS + '-period chart-data table.'],
-    ['The feed carries 7 weeks and 3 months; the window is applied here, so'],
-    ['changing it never means editing SQL.'],
+    ['two date columns plus % change, and a ' + CHART_PERIODS + '-period combo chart beside it'],
+    ['(columns = spend, line = ROAS on its own axis). The feed carries 7 weeks and'],
+    ['3 months; the window is applied in the script, so changing it never means'],
+    ['editing SQL — see KPI_PERIODS / CHART_PERIODS.'],
+    [''],
+    ['PERIODS ARE MATCHED AS DATES, NOT AS LABELS. Sheets auto-parses anything'],
+    ['date-shaped, so the label "2026-08" silently became the serial 46235 and'],
+    ['every lookup built from it missed. Header cells now read period_start'],
+    ['(column F, a real date) and rebuild the key with TEXT(); the display format'],
+    ['is cosmetic. Never point a lookup at column E — it is display text only.'],
     [''],
     ['FOUR CONVERSION SOURCES. CHECK COLUMN G (read_metrics) FIRST.'],
     ['  paid_*  Meta/Google own pixel, with a view-through window'],
@@ -383,6 +495,18 @@ function writeReadme_(ss) {
     ['  cs_*    Sephora, via catalog segment actions — the ONLY place it converts'],
     ['  site_*  what Shopify actually booked'],
     ['paid_roas and ga4_roas will disagree. The DTC slides show both. Never add them.'],
+    [''],
+    ['NO TARGET ROAS ANYWHERE IN THIS BOOK. The deck does not carry targets, so'],
+    ['nothing here invents one. If the client sets them, add a column to the'],
+    ['campaign_segments seed rather than hardcoding numbers in the script.'],
+    [''],
+    ['MTD COMPARES EQUAL WINDOWS, NOT A PART-MONTH AGAINST A WHOLE ONE. The month'],
+    ['grain excludes the month in progress, so an MTD tab built on it showed the'],
+    ['last two COMPLETE months. The card now emits a third grain, mtd: this month'],
+    ['through the last complete day, and the SAME number of days of last month —'],
+    ['Sep 1-7 vs Aug 1-7. The KPI table reads mtd; the chart still reads the last 4'],
+    ['complete months, because mtd only ever holds two points.'],
+    ['Today is excluded from every window: it is still filling.'],
     [''],
     ['WEEKS START ON SUNDAY, because the client asked for it. dbt_project.yml sets'],
     ['week_start: Sunday and the packages honour it, so every weekly row is anchored'],
@@ -410,17 +534,27 @@ function writeReadme_(ss) {
     ['begins there. August 2026 is the only complete month, so no blended MoM until'],
     ['October. Sephora has catalog-segment history from 2025-03; GA4 from 2024-08.'],
     [''],
-    ['GOOGLE ADS RUNS ~8 DAYS BEHIND. Its ~1,100% ROAS is correct — branded search'],
-    ['is run to a deliberate 1,000% tROAS.'],
+    ['READ FRESHNESS OFF THE HEALTH TAB; DO NOT ASSUME IT. Google Ads was 8 days'],
+    ['behind when this was built and is level with Meta and Shopify as of'],
+    ['2026-09-08 — a sync condition, not a standing property. The freshness check'],
+    ['reports it live per channel.'],
+    ['Google\'s ~1,100% ROAS is correct — branded search is run to a deliberate'],
+    ['1,000% tROAS.'],
     [''],
-    ['TO REBUILD: Extensions -> Apps Script -> Run buildReport. Metric sets live in'],
-    ['SHAPES, slides in TABS, and the window in KPI_PERIODS / CHART_PERIODS.']
+    ['TO REBUILD: Extensions -> Apps Script -> Save -> Run buildReport. Metric sets'],
+    ['live in SHAPES, slides in TABS, colours in C.']
   ];
   sh.getRange(1, 1, L.length, 1).setValues(L);
   sh.getRange(1, 1).setFontSize(14).setFontWeight('bold');
-  [3, 6, 11, 18, 22, 30, 36, 40, 44, 47].forEach(function (r) { sh.getRange(r, 1).setFontWeight('bold'); });
+  // Bold every ALL-CAPS section opener, rather than a hand-kept row list that
+  // silently drifts one line at a time as this text is edited.
+  for (var i = 0; i < L.length; i++) {
+    var t = L[i][0];
+    if (t && t === t.toUpperCase() && /[A-Z]{4}/.test(t)) sh.getRange(i + 1, 1).setFontWeight('bold');
+  }
   sh.setColumnWidth(1, 800);
   sh.getRange(1, 1, L.length, 1).setVerticalAlignment('top');
+  sh.setHiddenGridlines(true);
 }
 
 function orderTabs_(ss) {

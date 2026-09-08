@@ -20,7 +20,7 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEST = ROOT / "metabase" / "01_reporting_feed.sql"
 
-WEEKS, MONTHS = 7, 3
+WEEKS, MONTHS = 7, 4
 
 # Typed NULLs, by slot name.
 NULLS = {
@@ -160,6 +160,8 @@ def level_cte(lv):
         + branch(lv, "wk", "week")
         + "\n    union all\n\n"
         + branch(lv, "mo", "month")
+        + "\n    union all\n\n"
+        + branch(lv, "md", "mtd")
         + "\n),"
     )
 
@@ -218,6 +220,68 @@ mo as (
     where date_granularity = 'month'
       and date >= date_trunc('month', current_date) - interval '@@MONTHS@@ month'
       and date <  date_trunc('month', current_date)
+),
+
+md as (
+    /*  Genuine month-to-date, on a LIKE-FOR-LIKE window.
+
+        `mo` deliberately excludes the month in progress, so a tab called MTD
+        was really showing the last two COMPLETE months — August beside July.
+        And putting a partial September next to a whole August would have made
+        the % change meaningless anyway (7 days against 31).
+
+        So MTD is built from day rows instead: this month through the last
+        COMPLETE day (current_date - 1; today is still filling), and the same
+        number of days of the previous month. Both rows are stamped with their
+        own month start, so the sheet's newest/previous pair reads Sep 1-7 vs
+        Aug 1-7 — two windows of equal length.
+
+        On the 1st of a month the current window is empty, which is correct:
+        there is no month-to-date yet.
+
+        Aggregating from day grain is safe here because every ratio in this card
+        is computed from summed numerators and denominators further down, never
+        averaged from a pre-computed rate.                                    */
+    select
+        channel,
+        segment,
+        business_line,
+        in_dtc_overall,
+        market,
+        order_type,
+        campaign_id,
+        campaign_name,
+        date_trunc('month', date)::date         as date,
+        'mtd'                                   as date_granularity,
+        spend,
+        impressions,
+        clicks,
+        paid_purchases,
+        paid_revenue,
+        paid_add_to_cart,
+        cs_purchases,
+        cs_revenue,
+        cs_offline_purchases,
+        cs_add_to_cart,
+        ga4_sessions,
+        ga4_purchases,
+        ga4_revenue,
+        shopify_orders,
+        shopify_first_orders,
+        shopify_repeat_orders,
+        shopify_new_customers,
+        shopify_gross_sales,
+        shopify_total_sales,
+        shopify_discounts
+    from reporting.josiemaran_blended_performance
+    where date_granularity = 'day'
+      and (
+              (    date >= date_trunc('month', current_date)::date
+               and date <= current_date - 1 )
+           or (    date >= date_trunc('month', current_date - interval '1 month')::date
+               and date <= date_trunc('month', current_date - interval '1 month')::date
+                           + (date_part(day, current_date - 1)::int - 1) )
+          )
 ),
 
 """.replace("@@WEEKS@@", str(WEEKS)).replace("@@MONTHS@@", str(MONTHS))
@@ -352,13 +416,23 @@ select
     -- "2026-W35" and read as the week before. The deck calls it 8/30/2026.
     case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
                when 'month' then to_char(period_start, 'YYYY-MM')
+               -- both MTD rows cover days 1..n, so one suffix describes each
+               when 'mtd'   then to_char(period_start, 'FMMon')
+                                 || ' 1-' || date_part(day, current_date - 1)::int::varchar
                else '' end                                      as period_label,
     period_start,
     read_metrics,
 
-    report_level || '|' || row_label || '|' || market || '|' ||
-        case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
+    report_level || '|' || row_label || '|' || market || '|' || grain || '|' ||
+        -- lookup_key uses ISO dates, NOT the display label. Google Sheets
+        -- auto-parses '2026-08' and '8/23/2026' into date serials on write, so
+        -- a sheet formula rebuilding the key from a header cell produced
+        -- '...|46235' and matched nothing — every MTD metric came back blank.
+        -- ISO is what TEXT(cell,"yyyy-mm-dd") yields on the sheet side, so the
+        -- two agree whether Sheets stored the header as text or as a date.
+        case grain when 'week'  then to_char(period_start, 'YYYY-MM-DD')
                    when 'month' then to_char(period_start, 'YYYY-MM')
+                   when 'mtd'   then to_char(period_start, 'YYYY-MM')
                    else '' end                                  as lookup_key,
 
     -- ── Delivery ───────────────────────────────────────────────────────────
@@ -417,7 +491,7 @@ select
         when report_level = 'Health'          then true
         when report_level = 'Sephora Segment' then period_start >= '2025-03-01'
         when report_level = 'GA4 Channel'     then period_start >= '2024-08-17'
-        when grain = 'month'                   then period_start >= '2026-08-01'
+        when grain in ('month', 'mtd')         then period_start >= '2026-08-01'
         else period_start >= '2026-07-27'
     end                                                          as data_valid,
 

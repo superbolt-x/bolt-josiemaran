@@ -25,18 +25,56 @@ ever needs breaking up — but at 652 rows it does not.
 
 ## Column map
 
+48 columns, A:AV. Regenerate with `scripts/gen_reporting_feed.py`; verify the
+sheet script still agrees with `scripts/check_feed_contract.py`.
+
 ```
-A  report_level      I  spend           O  paid_purchases   S  cs_purchases          AA site_orders          AG blended_roas
-B  row_label         J  impressions     P  paid_revenue     T  cs_revenue            AB site_first_orders    AH blended_cac
-C  market            K  clicks          Q  paid_roas        U  cs_roas               AC site_new_customers   AI data_valid
-D  grain             L  cpm             R  paid_cpa         V  cs_cpa                AD site_gross_sales     AJ has_catalog_feedback
-E  period_label      M  ctr                              W  cs_aov                AE aov                  AK status
-F  period_start      N  cpc                              X  cs_add_to_cart        AF pct_new               AL detail
-G  read_metrics                                          Y  cs_instore_purchases
-H  lookup_key                                            Z  pct_instore
+A report_level            I spend                   Q paid_roas               Y ga4_cpa                 AG cs_cvr                 AO aov
+B row_label               J impressions             R paid_cpa                Z ga4_aov                 AH cs_add_to_cart         AP pct_new
+C market                  K clicks                  S paid_cvr                AA ga4_cvr                AI cs_instore_purchases   AQ blended_roas
+D grain                   L cpm                     T paid_aov                AB cs_purchases           AJ pct_instore            AR blended_cac
+E period_label            M ctr                     U ga4_sessions            AC cs_revenue             AK site_orders            AS data_valid
+F period_start            N cpc                     V ga4_purchases           AD cs_roas                AL site_first_orders      AT has_catalog_feedback
+G read_metrics            O paid_purchases          W ga4_revenue             AE cs_cpa                 AM site_new_customers     AU status
+H lookup_key              P paid_revenue            X ga4_roas                AF cs_aov                 AN site_gross_sales       AV detail
 ```
 
-`lookup_key` (col **H**) = `report_level|row_label|market|period_label`
+`lookup_key` (col **H**) = `report_level|row_label|market|grain|period`
+
+where `period` is **ISO**, not the display label:
+
+| grain | `period_start` | `period` in the key | `period_label` (col E, display only) |
+|---|---|---|---|
+| `week` | the Sunday | `2026-08-23` | `8/23/2026` |
+| `month` | the 1st | `2026-08` | `2026-08` |
+| `mtd` | the 1st | `2026-08` | `Aug 1-7` |
+
+**The key never carries the display label, and this is load-bearing.** Google
+Sheets auto-parses anything date-shaped on write, so `2026-08` landed in the
+sheet as the serial `46235`. A formula rebuilding the key from that header cell
+produced `...|46235`, matched nothing, and the whole MTD tab came back blank
+with no error anywhere. Header cells now hold `period_start` (a real date) and
+rebuild the key with `TEXT(...)` in the ISO shape above; the display format is
+cosmetic. Never point a lookup at column E.
+
+`grain` is in the key because `month` and `mtd` both key on `YYYY-MM` — without
+it a `MATCH` would silently return whichever of the two sorted first.
+
+### Grains
+
+- **`week`** — 7 Sunday-anchored weeks, the week in progress excluded.
+- **`month`** — 4 complete months, the month in progress excluded.
+- **`mtd`** — exactly two rows: this month through the last complete day, and
+  the **same number of days** of last month (Sep 1-7 vs Aug 1-7). Built from
+  day rows, because the `month` grain excludes the current month and a partial
+  September beside a whole August makes the % change meaningless. Today is
+  excluded from every window; it is still filling.
+
+### No targets
+
+The deck carries no target ROAS, so nothing in the book invents one. If the
+client sets targets later, add a column to `seeds/campaign_segments.csv` and
+join it in — do not hardcode numbers in the Apps Script.
 
 ## The two columns to read before any metric
 
@@ -73,7 +111,7 @@ unreported conversions. Amber, not grey — that is spend to act on.
 | `Campaigns` | QUERY | Flat, sortable, filterable |
 | `Site` | INDEX+MATCH | Web vs Subscription |
 | `Health` | QUERY | 14 rows, pinned at the top of the report |
-| `Config` | typed | Row order, display names, targets |
+| `README` | typed | The contract, the caveats, and how to rebuild |
 | `README` | typed | Copy from the bottom of this doc |
 
 ### Pattern A — `QUERY()` for flat tables
@@ -142,7 +180,7 @@ For `DTC WoW`, swap the level to `"DTC Segment"` and use **spend ·
 paid_purchases · paid_roas · paid_cpa · site_orders · site_new_customers ·
 blended_cac · blended_roas · aov · pct_new**.
 
-For `Monthly`, level `"Business"` and `period_label` in `YYYY-MM`.
+For the MTD tabs, grain `mtd` and the month start in `YYYY-MM`.
 
 ### Conditional formats — two colours, two meanings
 
@@ -163,7 +201,7 @@ not exist yet, ignore it.
 
 ### `Config`
 
-| A `row_label` | B `display_name` | C `show` | D `target` | E `level` |
+| A `row_label` | B `display_name` | C `show` | D `level` |
 |---|---|---|---|---|
 | `Sephora – Total` | Sephora — Total | TRUE | | Sephora Segment |
 | `US Collab` | US Collab (DPA) | TRUE | 1.50 | Sephora Segment |
@@ -240,8 +278,11 @@ rather than in Metabase.
 > 10 Existing target, judge paid on **new-customer CAC** and **% new orders**,
 > not blended ROAS.
 >
-> **Google Ads runs ~8 days behind.** Check the Health tab before comparing
-> Google to another channel in the current week. Google's ~1,100% ROAS is
+> **Check the Health tab for freshness before comparing channels in the
+> current week.** Google Ads was 8 days behind when this was first built and
+> is level with the others as of 2026-09-08 — the lag is a sync condition, not
+> a standing property, so the `freshness` check reports it live rather than
+> this doc asserting a number. Google's ~1,100% ROAS is
 > correct — branded search is run to a deliberate 1,000% tROAS.
 >
 > **Three campaign naming conventions are live** — tagged `plat:…`, new

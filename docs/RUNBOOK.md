@@ -166,7 +166,11 @@ row in the feed, and the Apps Script `CONFIG` decides whether to display it.
   year. `data_valid` is FALSE before that and the sheet greys it.
 - **Sephora is the opposite** — 18 months of catalog-segment history from
   2025-03, so Sephora MoM and YoY both work today.
-- **Google Ads runs ~8 days behind** Meta and Shopify. Its ~1,100% ROAS is
+- **Platform freshness varies; read it off the Health tab, do not assume it.**
+  Google Ads was 8 days behind when this was first built and is level with
+  Meta and Shopify as of 2026-09-08, so the lag is a sync condition, not a
+  standing property — the `freshness` check reports it live per channel.
+  Google's ~1,100% ROAS is
   correct: branded search is run to a deliberate 1,000% tROAS.
 - **TikTok has no conversion data of any kind** — $292,756 spend, 145M
   impressions, zero conversions across the full history. Spend and delivery are

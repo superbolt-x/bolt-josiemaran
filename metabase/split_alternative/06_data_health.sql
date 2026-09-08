@@ -5,7 +5,7 @@
   Pin this above the report. Every issue found while building this model would
   have been caught by one of these four checks.
 
-    freshness              last day present per channel. Google Ads runs ~8 days
+    freshness              last day present per channel. Lag varies by sync
                            behind Meta and Shopify, so any card mixing them in
                            the current week under-reports Google.
     catalog-feedback       Sephora spend with no catalog-segment rows. FAILING
