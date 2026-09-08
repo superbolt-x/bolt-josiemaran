@@ -46,7 +46,7 @@
   March 2025.
 
   ── Why sources, not refs ───────────────────────────────────────────────────
-  Meta and Google are read from `source('jm_reporting', …)` — the package
+  Meta and Google are read from `source('reporting', …)` — the package
   reporting tables that are already built and paid for. A ref() would pull
   their whole package lineage into every build of ours; one run rebuilt
   facebook_base.facebook_performance_by_campaign_daily (50s),
@@ -233,7 +233,7 @@ fb_adset_to_campaign as (
     select
         adset_id::varchar               as adset_id,
         max(campaign_id::varchar)       as campaign_id
-    from {{ source('jm_reporting', 'josiemaran_facebook_performance_by_ad') }}
+    from {{ source('reporting', 'josiemaran_facebook_performance_by_ad') }}
     where date_granularity = 'day'
       and adset_id is not null
     group by 1

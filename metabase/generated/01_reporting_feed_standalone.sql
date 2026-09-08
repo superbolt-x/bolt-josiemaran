@@ -96,7 +96,7 @@ select
         g.date_granularity,
         (case g.date_granularity
         when 'day'     then p.date
-        when 'week'    then (date_trunc('week', p.date + 1) - 1)::date
+        when 'week'    then ((date_trunc('week', p.date + 1) - 1)::date)
         when 'month'   then date_trunc('month',   p.date)::date
         when 'quarter' then date_trunc('quarter', p.date)::date
         when 'year'    then date_trunc('year',    p.date)::date
@@ -185,7 +185,7 @@ select
         g.date_granularity,
         (case g.date_granularity
         when 'day'     then o.date
-        when 'week'    then (date_trunc('week', o.date + 1) - 1)::date
+        when 'week'    then ((date_trunc('week', o.date + 1) - 1)::date)
         when 'month'   then date_trunc('month',   o.date)::date
         when 'quarter' then date_trunc('quarter', o.date)::date
         when 'year'    then date_trunc('year',    o.date)::date
@@ -395,7 +395,7 @@ select
         gr.date_granularity,
         (case gr.date_granularity
         when 'day'     then d.date
-        when 'week'    then (date_trunc('week', d.date + 1) - 1)::date
+        when 'week'    then ((date_trunc('week', d.date + 1) - 1)::date)
         when 'month'   then date_trunc('month',   d.date)::date
         when 'quarter' then date_trunc('quarter', d.date)::date
         when 'year'    then date_trunc('year',    d.date)::date

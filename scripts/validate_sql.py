@@ -107,7 +107,16 @@ def main(path):
           + ("" if not bad_unions else f"  → {bad_unions}"))
     if bad_unions: fails.append("union-mismatch")
 
-    # 6 — namespacing leaked into a string literal
+    # 6 — an unbound macro parameter leaked into the SQL as a column name.
+    # jm_period_start passes its arg to a nested jm_week_start call; if the
+    # compiler fails to bind it, the output references a column literally
+    # called `date_col` / `granularity_col` and Redshift errors at run time.
+    params = sorted(set(re.findall(r"\b(date_col|granularity_col|segment|campaign_name)\b(?=\s*[+),])", sql)) & {"date_col", "granularity_col"})
+    print(f"{'✓' if not params else '✗'} no unbound macro parameters"
+          + ("" if not params else f"  → {params}"))
+    if params: fails.append("unbound-macro-arg")
+
+    # 7 — namespacing leaked into a string literal
     # The compiler prefixes a model's internal CTE names to avoid collisions.
     # If that rewrite touches a string literal it corrupts DATA, not just
     # identifiers — 'google' became 'blended_performance__google' once, which
