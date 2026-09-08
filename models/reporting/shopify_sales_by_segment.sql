@@ -76,13 +76,7 @@ spine as (
        real first/last order in the period rather than the period start. #}
     select
         g.date_granularity,
-        case g.date_granularity
-            when 'day'     then o.date
-            when 'week'    then date_trunc('week',    o.date)::date
-            when 'month'   then date_trunc('month',   o.date)::date
-            when 'quarter' then date_trunc('quarter', o.date)::date
-            when 'year'    then date_trunc('year',    o.date)::date
-        end                        as date,
+        {{ jm_period_start('o.date', 'g.date_granularity') }} as date,
         o.date                     as order_date,
         o.market,
         o.order_type,

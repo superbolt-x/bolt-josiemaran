@@ -46,7 +46,7 @@
   March 2025.
 
   ── Why sources, not refs ───────────────────────────────────────────────────
-  Meta and Google are read from `source('jm_reporting', …)` — the package
+  Meta and Google are read from `source('reporting', …)` — the package
   reporting tables that are already built and paid for. A ref() would pull
   their whole package lineage into every build of ours; one run rebuilt
   facebook_base.facebook_performance_by_campaign_daily (50s),
@@ -68,8 +68,36 @@
   ── Metric families, never interchangeable ──────────────────────────────────
     spend / impressions / clicks   delivery
     paid_*                         what Meta/Google claim on their own pixel
+    ga4_*                          what GA4 attributes by session source/medium
     cs_*                           Sephora purchases via catalog segment
     shopify_*                      what JM.com actually booked
+
+  Four conversion sources for the same business, and they will not agree. That
+  is expected: paid_* is platform-attributed with a view-through window, ga4_*
+  is last-non-direct session attribution, shopify_* is what the store booked.
+  `ga4_roas` on the DTC slides is ga4_revenue ÷ spend; `paid_roas` is
+  paid_revenue ÷ spend. Show both, never add them.
+
+  ── GA4 channel mapping ─────────────────────────────────────────────────────
+    session_source_medium = 'metaads / paidsocial'  -> Meta
+    session_source_medium = 'google / cpc'          -> Google
+    everything else                                 -> 'Other' (email, SMS,
+                                                       organic, direct,
+                                                       affiliates, …)
+  TikTok has no mapping yet — there are no DTC TikTok campaigns, so no GA4
+  source/medium to claim. Add one here when that changes.
+
+  Google's `session_campaign_id` IS the campaign id and joins directly. Meta's
+  is `<adset_id>_v2_sNN` — the prefix is the ADSET id, so it needs
+  split_part(_, '_', 1) and an adset→campaign lookup. Over 2026-08-01 → 09-07
+  that resolves 44,784 of 45,147 Meta sessions (99.2%); the remainder lands in
+  'Unattributed Paid' rather than being dropped.
+
+  GA4 rows that resolve to a campaign are ATTACHED to that campaign's paid row.
+  Rows that do not — 'Other', plus paid sessions whose campaign could not be
+  resolved or that had no spend that day — are emitted as their own rows with
+  channel 'GA4'. The two sets are disjoint, so summing ga4_revenue across the
+  whole table reconciles to the GA4 table total without double counting.
 
   Site rows are stamped business_line 'DTC' and segment 'Site', so Sephora
   spend can never share a business line with Shopify revenue.
@@ -195,6 +223,76 @@ tiktok as (
 
 ),
 
+-- ─── GA4 ────────────────────────────────────────────────────────────────────
+
+fb_adset_to_campaign as (
+
+    /*  GA4's Meta session_campaign_id carries the ADSET id, not the campaign
+        id. Verified unique: zero adsets map to more than one campaign, so
+        max() is a safe collapse rather than an arbitrary pick.  */
+    select
+        adset_id::varchar               as adset_id,
+        max(campaign_id::varchar)       as campaign_id
+    from {{ source('reporting', 'josiemaran_facebook_performance_by_ad') }}
+    where date_granularity = 'day'
+      and adset_id is not null
+    group by 1
+
+),
+
+ga4_daily as (
+
+    select
+        g.date,
+        case g.session_source_medium
+            when 'metaads / paidsocial' then 'meta'
+            when 'google / cpc'         then 'google'
+            else 'other'
+        end                                                     as platform,
+        case
+            -- Google: the session campaign id IS the campaign id
+            when g.session_source_medium = 'google / cpc'
+                 and g.session_campaign_id similar to '[0-9]+'
+                 then g.session_campaign_id
+            -- Meta: prefix is the adset id -> look up its campaign
+            when g.session_source_medium = 'metaads / paidsocial'
+                 then a.campaign_id
+        end                                                     as campaign_id,
+        sum(g.sessions)                                         as ga4_sessions,
+        sum(g.conversions_purchase)                             as ga4_purchases,
+        sum(g.purchase_revenue)                                 as ga4_revenue
+    from {{ source('ga4_raw', 'traffic_sources_session') }} g
+    left join fb_adset_to_campaign a
+        on  g.session_source_medium = 'metaads / paidsocial'
+        and a.adset_id = split_part(g.session_campaign_id, '_', 1)
+    group by 1, 2, 3
+
+),
+
+ga4_grains as (
+    select 'day'     as date_granularity
+    union all select 'week'
+    union all select 'month'
+    union all select 'quarter'
+    union all select 'year'
+),
+
+ga4 as (
+
+    select
+        gr.date_granularity,
+        {{ jm_period_start('d.date', 'gr.date_granularity') }} as date,
+        d.platform,
+        d.campaign_id,
+        sum(d.ga4_sessions)             as ga4_sessions,
+        sum(d.ga4_purchases)            as ga4_purchases,
+        sum(d.ga4_revenue)              as ga4_revenue
+    from ga4_daily d
+    cross join ga4_grains gr
+    group by 1, 2, 3, 4
+
+),
+
 paid_union as (
     select * from meta
     union all select * from google
@@ -227,6 +325,10 @@ paid as (
         p.cs_offline_purchases,
         p.cs_add_to_cart,
 
+        g.ga4_sessions,
+        g.ga4_purchases,
+        g.ga4_revenue,
+
         cast(null as bigint)           as shopify_orders,
         cast(null as bigint)           as shopify_first_orders,
         cast(null as bigint)           as shopify_repeat_orders,
@@ -239,6 +341,72 @@ paid as (
     left join segment_map s
         on  s.platform    = p.platform
         and s.campaign_id = p.campaign_id
+    left join ga4 g
+        on  g.platform         = p.platform
+        and g.campaign_id      = p.campaign_id
+        and g.date             = p.date
+        and g.date_granularity = p.date_granularity
+
+),
+
+-- ─── GA4 rows with nowhere to attach ────────────────────────────────────────
+
+ga4_unattached as (
+
+    /*  Everything GA4 measured that is NOT already on a paid row: the 'Other'
+        bucket (email, SMS, organic, direct, affiliates), Meta sessions whose
+        adset did not resolve to a campaign, and paid campaigns that drove
+        sessions on a day they had no spend.
+
+        Disjoint from the joined set by construction, so ga4_revenue summed
+        across the whole table equals the GA4 table total.  */
+
+    select
+        'GA4'                          as channel,
+        case when g.platform = 'other' then 'Other'
+             else 'Unattributed Paid' end as segment,
+        'DTC'                          as business_line,
+        false                          as in_dtc_overall,
+        'Unknown'                      as market,
+        cast(null as varchar(16))      as order_type,
+        cast(null as varchar(64))      as campaign_id,
+        cast(null as varchar(256))     as campaign_name,
+        g.date,
+        g.date_granularity,
+
+        cast(null as double precision) as spend,
+        cast(null as bigint)           as impressions,
+        cast(null as double precision) as clicks,
+        cast(null as double precision) as paid_purchases,
+        cast(null as double precision) as paid_revenue,
+        cast(null as double precision) as paid_add_to_cart,
+
+        cast(null as double precision) as cs_purchases,
+        cast(null as double precision) as cs_revenue,
+        cast(null as double precision) as cs_offline_purchases,
+        cast(null as double precision) as cs_add_to_cart,
+
+        sum(g.ga4_sessions)            as ga4_sessions,
+        sum(g.ga4_purchases)           as ga4_purchases,
+        sum(g.ga4_revenue)             as ga4_revenue,
+
+        cast(null as bigint)           as shopify_orders,
+        cast(null as bigint)           as shopify_first_orders,
+        cast(null as bigint)           as shopify_repeat_orders,
+        cast(null as bigint)           as shopify_new_customers,
+        cast(null as double precision) as shopify_gross_sales,
+        cast(null as double precision) as shopify_total_sales,
+        cast(null as double precision) as shopify_discounts
+
+    from ga4 g
+    where not exists (
+        select 1 from paid_union p
+        where p.platform         = g.platform
+          and p.campaign_id      = g.campaign_id
+          and p.date             = g.date
+          and p.date_granularity = g.date_granularity
+    )
+    group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 
 ),
 
@@ -270,6 +438,10 @@ site as (
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart,
 
+        cast(null as bigint)           as ga4_sessions,
+        cast(null as double precision) as ga4_purchases,
+        cast(null as double precision) as ga4_revenue,
+
         orders                         as shopify_orders,
         first_orders                   as shopify_first_orders,
         repeat_orders                  as shopify_repeat_orders,
@@ -283,5 +455,7 @@ site as (
 )
 
 select * from paid
+union all
+select * from ga4_unattached
 union all
 select * from site

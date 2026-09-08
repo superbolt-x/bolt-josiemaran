@@ -1,167 +1,168 @@
 /**
  * Josie Maran — Automated Reporting
- * Builds every tab, formula, conditional format and dropdown in the sheet.
+ * RUN: Extensions → Apps Script → paste → Save → Run ▸ buildReport
+ * Idempotent. Never touches the feed tab, which the Metabase extension owns.
  *
- * ── HOW TO RUN ──────────────────────────────────────────────────────────────
- *   1. Open the sheet → Extensions → Apps Script
- *   2. Delete the placeholder `myFunction`, paste this whole file, Save
- *   3. Run ▸ buildReport   (authorise when prompted — it only touches this file)
+ * ── LAYOUT MIRRORS THE DECK, NOT A GENERIC GRID ─────────────────────────────
+ * Each slide carries a WoW table with metrics down the rows and exactly TWO
+ * date columns plus % change, and a "Spend vs ROAS" chart. So that is what
+ * this builds: one KPI block per segment, metrics as rows, 2 periods + delta,
+ * followed by a 4-period chart-data block the Sheets chart points at.
  *
- * Idempotent: safe to re-run. It rebuilds the report tabs from scratch every
- * time but NEVER touches the `feed` tab, which the Metabase extension owns.
+ * The feed supplies 7 weeks and 3 months. The KPI block reads the last 2 and
+ * the chart block the last 4 — the filtering happens here, not in the card, so
+ * changing the report window never means editing SQL.
  *
- * ── WHAT IT ASSUMES ─────────────────────────────────────────────────────────
- * A tab named `feed`, written by the Metabase extension from the question
- * "JM – Reporting Feed", with its header row in row 1 and these columns:
+ * ── FEED TAB ────────────────────────────────────────────────────────────────
+ * The extension appends the question id, so the tab is `feed @ 57484`. The name
+ * has a space and an `@`, so it has to be quoted in every formula. FEED_REF
+ * does that once — change FEED if the question id changes, nothing else.
  *
- *   A report_level   E period_label   H lookup_key   AI data_valid
- *   B row_label      F period_start                  AJ has_catalog_feedback
- *   C market         G read_metrics                  AK status
- *   D grain                                          AL detail
- *
- * Metrics are found BY HEADER NAME, not by column letter, so adding or
- * reordering a metric column in the Metabase question will not break the grids.
+ * ── FOUR CONVERSION SOURCES, NONE INTERCHANGEABLE ───────────────────────────
+ * Column G (read_metrics) says which family applies to a row:
+ *   paid_*  Meta/Google own pixel, view-through window
+ *   ga4_*   GA4 last-non-direct session attribution
+ *   cs_*    Sephora, via catalog segment actions
+ *   site_*  what Shopify booked
+ * paid_roas and ga4_roas WILL disagree. The DTC slides show both. Never add them.
  */
 
-var FEED = 'feed';
-var WEEKS = 8;          // week columns per grid
-var MONTHS = 12;        // month columns on the Monthly tab
+var FEED     = 'feed @ 57484';
+var FEED_REF = "'" + FEED + "'";
+var COLS     = '$A:$AV';        // 48 columns
+var KEY      = '$H:$H';         // lookup_key
+var VALID    = '$AS:$AS';       // data_valid
+var FEEDBACK = '$AT:$AT';       // has_catalog_feedback
 
-/** Rows for each grid: [row_label, market, target]  — order here is display order. */
-var CONFIG = {
-  'Sephora WoW': {
-    level: 'Sephora Segment',
-    // Labels are the segment names from seeds/campaign_segments.csv, which come
-    // from the reporting deck. Collab sits above Traffic on purpose: it is a
-    // small share of spend and nearly all of the measured purchases.
-    rows: [
-      ['Sephora – Total',    'All', ''],
-      ['Sephora US Collab',  'All', 1.50],
-      ['Sephora CA Collab',  'All', 2.50],
-      ['Sephora US Traffic', 'All', ''],
-      ['Sephora CA Traffic', 'All', ''],
-      ['Sephora @ Kohls',    'All', '']
+var KPI_PERIODS   = 2;          // the slide's WoW table
+var CHART_PERIODS = 4;          // the slide's chart
+
+// Metric sets, one per slide shape. Order is the order on the slide.
+var SHAPES = {
+  dtc: {
+    metrics: [
+      ['Spend',      'spend',          '$#,##0'],
+      ['CPM',        'cpm',            '$0.00'],
+      ['CTR',        'ctr',            '0.00%'],
+      ['Clicks',     'clicks',         '#,##0'],
+      ['CPC',        'cpc',            '$0.00'],
+      ['CVR',        'paid_cvr',       '0.00%'],
+      ['Purchases',  'paid_purchases', '#,##0'],
+      ['CPA',        'paid_cpa',       '$#,##0.00'],
+      ['Revenue',    'paid_revenue',   '$#,##0'],
+      ['ROAS',       'paid_roas',      '0.00'],
+      ['GA4 ROAS',   'ga4_roas',       '0.00'],
+      ['AOV',        'paid_aov',       '$#,##0.00']
     ],
-    // Sephora converts on Sephora's pixel: cs_* only. No paid_roas, no blended.
-    blocks: [
-      ['SPEND',              'spend',                '$#,##0'],
-      ['SEPHORA PURCHASES',  'cs_purchases',         '#,##0'],
-      ['SEPHORA REVENUE',    'cs_revenue',           '$#,##0'],
-      ['SEPHORA ROAS',       'cs_roas',              '0.00'],
-      ['SEPHORA CPA',        'cs_cpa',               '$#,##0.00'],
-      ['% IN STORE',         'pct_instore',          '0.0%'],
-      ['CPC',                'cpc',                  '$0.00'],
-      ['CTR',                'ctr',                  '0.00%']
-    ],
-    flagCol: 'AJ',   // has_catalog_feedback → amber
-    flagStyle: 'amber',
-    flagBlocks: ['SEPHORA PURCHASES', 'SEPHORA REVENUE', 'SEPHORA ROAS', 'SEPHORA CPA', '% IN STORE']
+    chart: [['Spend', 'spend', '$#,##0'], ['ROAS', 'paid_roas', '0.00']],
+    flag: VALID, flagStyle: 'grey'
   },
-  'DTC WoW': {
-    level: 'DTC Segment',
-    // `Paid DTC Overall` = the Meta Overall + Google Overall campaign IDs, NOT
-    // everything in the DTC account. Historical DTC campaigns are 'Unmapped'
-    // and deliberately excluded — see the Health tab for their spend.
-    rows: [
-      ['Paid DTC Overall', 'All', 3.50],
-      ['Meta Overall',     'All', 2.50],
-      ['Google Overall',   'All', 10.00],
-      ['Site',             'All', '']
+  sephoraTraffic: {
+    // Delivery only, on purpose. These campaigns emit no catalog-segment rows,
+    // so there is no honest Sephora conversion figure to put on the slide.
+    metrics: [
+      ['Spend',  'spend',  '$#,##0'],
+      ['CPM',    'cpm',    '$0.00'],
+      ['CTR',    'ctr',    '0.00%'],
+      ['Clicks', 'clicks', '#,##0'],
+      ['CPC',    'cpc',    '$0.00']
     ],
-    blocks: [
-      ['SPEND',            'spend',              '$#,##0'],
-      ['PAID PURCHASES',   'paid_purchases',     '#,##0'],
-      ['PAID ROAS',        'paid_roas',          '0.00'],
-      ['PAID CPA',         'paid_cpa',           '$#,##0.00'],
-      ['SITE ORDERS',      'site_orders',        '#,##0'],
-      ['NEW CUSTOMERS',    'site_new_customers', '#,##0'],
-      ['BLENDED CAC',      'blended_cac',        '$#,##0.00'],
-      ['BLENDED ROAS',     'blended_roas',       '0.00'],
-      ['AOV',              'aov',                '$#,##0.00'],
-      ['% NEW ORDERS',     'pct_new',            '0.0%']
-    ],
-    flagCol: 'AI',   // data_valid → grey
-    flagStyle: 'grey',
-    flagBlocks: ['BLENDED CAC', 'BLENDED ROAS', 'SITE ORDERS', 'NEW CUSTOMERS', 'AOV', '% NEW ORDERS']
+    chart: [['Spend', 'spend', '$#,##0'], ['CPC', 'cpc', '$0.00']],
+    flag: FEEDBACK, flagStyle: 'amber'
   },
-  'Site': {
-    level: 'Site',
-    rows: [
-      ['All',          'All', ''],
-      ['Web',          'All', ''],
-      ['Subscription', 'All', ''],
-      ['All',          'US',  ''],
-      ['All',          'CA',  '']
+  sephoraCollab: {
+    metrics: [
+      ['Spend',     'spend',        '$#,##0'],
+      ['CPM',       'cpm',          '$0.00'],
+      ['CTR',       'ctr',          '0.00%'],
+      ['CPC',       'cpc',          '$0.00'],
+      ['CVR',       'cs_cvr',       '0.00%'],
+      ['Purchases', 'cs_purchases', '#,##0'],
+      ['CPA',       'cs_cpa',       '$#,##0.00'],
+      ['Revenue',   'cs_revenue',   '$#,##0'],
+      ['ROAS',      'cs_roas',      '0.00'],
+      ['AOV',       'cs_aov',       '$#,##0.00'],
+      ['% in store','pct_instore',  '0.0%']
     ],
-    blocks: [
-      ['ORDERS',         'site_orders',        '#,##0'],
-      ['FIRST ORDERS',   'site_first_orders',  '#,##0'],
-      ['NEW CUSTOMERS',  'site_new_customers', '#,##0'],
-      ['GROSS SALES',    'site_gross_sales',   '$#,##0'],
-      ['AOV',            'aov',                '$#,##0.00'],
-      ['% NEW ORDERS',   'pct_new',            '0.0%']
+    chart: [['Spend', 'spend', '$#,##0'], ['ROAS', 'cs_roas', '0.00']],
+    flag: FEEDBACK, flagStyle: 'amber'
+  },
+  site: {
+    metrics: [
+      ['Orders',        'site_orders',        '#,##0'],
+      ['First orders',  'site_first_orders',  '#,##0'],
+      ['New customers', 'site_new_customers', '#,##0'],
+      ['Gross sales',   'site_gross_sales',   '$#,##0'],
+      ['AOV',           'aov',                '$#,##0.00'],
+      ['% new orders',  'pct_new',            '0.0%']
     ],
-    flagCol: 'AI',
-    flagStyle: 'grey',
-    flagBlocks: []
+    chart: [['Gross sales', 'site_gross_sales', '$#,##0'], ['Orders', 'site_orders', '#,##0']],
+    flag: VALID, flagStyle: 'grey'
+  },
+  ga4: {
+    metrics: [
+      ['Sessions',  'ga4_sessions',  '#,##0'],
+      ['Purchases', 'ga4_purchases', '#,##0'],
+      ['Revenue',   'ga4_revenue',   '$#,##0'],
+      ['CVR',       'ga4_cvr',       '0.00%'],
+      ['AOV',       'ga4_aov',       '$#,##0.00']
+    ],
+    chart: [['Revenue', 'ga4_revenue', '$#,##0'], ['Sessions', 'ga4_sessions', '#,##0']],
+    flag: VALID, flagStyle: 'grey'
   }
 };
 
-var MONTHLY = {
-  level: 'Business',
-  rows: [
-    ['Total Paid',        'All', ''],
-    ['Sephora',           'All', ''],
-    ['Sephora – Meta',    'All', ''],
-    ['Sephora – TikTok',  'All', ''],
-    ['DTC',               'All', ''],
-    ['DTC – Meta',        'All', ''],
-    ['DTC – Google',      'All', ''],
-    ['DTC – Shopify',     'All', '']
-  ],
-  blocks: [
-    ['SPEND',             'spend',            '$#,##0'],
-    ['SEPHORA PURCHASES', 'cs_purchases',     '#,##0'],
-    ['SEPHORA ROAS',      'cs_roas',          '0.00'],
-    ['PAID ROAS',         'paid_roas',        '0.00'],
-    ['SITE ORDERS',       'site_orders',      '#,##0'],
-    ['SITE GROSS SALES',  'site_gross_sales', '$#,##0'],
-    ['BLENDED ROAS',      'blended_roas',     '0.00']
-  ],
-  flagCol: 'AI',
-  flagStyle: 'grey',
-  flagBlocks: ['SEPHORA PURCHASES', 'SEPHORA ROAS', 'SITE ORDERS', 'SITE GROSS SALES', 'BLENDED ROAS']
+// One entry per slide. `level` + `row` + `market` build the lookup key.
+var TABS = {
+  'DTC WoW': { shape: 'dtc', grain: 'week', slides: [
+    ['Paid DTC Overall', 'DTC Segment', 'All', 3.50],
+    ['Meta Overall',     'DTC Segment', 'All', 2.50],
+    ['Google Overall',   'DTC Segment', 'All', 10.00]
+  ]},
+  'Sephora Traffic WoW': { shape: 'sephoraTraffic', grain: 'week', slides: [
+    ['Sephora US Traffic', 'Sephora Segment', 'All', ''],
+    ['Sephora CA Traffic', 'Sephora Segment', 'All', ''],
+    ['Sephora @ Kohls',    'Sephora Segment', 'All', '']
+  ]},
+  'Sephora Collab WoW': { shape: 'sephoraCollab', grain: 'week', slides: [
+    ['Sephora US Collab', 'Sephora Segment', 'All', 1.50],
+    ['Sephora CA Collab', 'Sephora Segment', 'All', 2.50],
+    ['Sephora – Total',   'Sephora Segment', 'All', '']
+  ]},
+  'Site': { shape: 'site', grain: 'week', slides: [
+    ['All',          'Site', 'All', ''],
+    ['Web',          'Site', 'All', ''],
+    ['Subscription', 'Site', 'All', '']
+  ]},
+  'GA4 Channels': { shape: 'ga4', grain: 'week', slides: [
+    ['Other',             'GA4 Channel', 'All', ''],
+    ['Unattributed Paid', 'GA4 Channel', 'All', '']
+  ]},
+  'MTD': { shape: 'dtc', grain: 'month', slides: [
+    ['Paid DTC Overall', 'DTC Segment', 'All', ''],
+    ['Meta Overall',     'DTC Segment', 'All', ''],
+    ['Google Overall',   'DTC Segment', 'All', '']
+  ]},
+  'MTD Sephora': { shape: 'sephoraCollab', grain: 'month', slides: [
+    ['Sephora – Total',   'Sephora Segment', 'All', ''],
+    ['Sephora US Collab', 'Sephora Segment', 'All', ''],
+    ['Sephora CA Collab', 'Sephora Segment', 'All', '']
+  ]}
 };
 
-// ── palette ────────────────────────────────────────────────────────────────
-var C = {
-  header:  '#14201e',
-  headerT: '#f6f5f0',
-  block:   '#efede5',
-  rule:    '#dfdcd1',
-  amber:   '#f4e9cf',
-  amberT:  '#8a6412',
-  grey:    '#eeeeee',
-  greyT:   '#999999',
-  note:    '#66756f'
-};
+var C = { header:'#14201e', headerT:'#f6f5f0', block:'#efede5', amber:'#f4e9cf',
+          amberT:'#8a6412', grey:'#eeeeee', greyT:'#999999', note:'#66756f' };
 
 function buildReport() {
   var ss = SpreadsheetApp.getActive();
   ensureFeedTab_(ss);
-  writeConfig_(ss);
   writeReadme_(ss);
-  Object.keys(CONFIG).forEach(function (name) {
-    buildGrid_(ss, name, CONFIG[name], 'week', WEEKS);
-  });
-  buildGrid_(ss, 'Monthly', MONTHLY, 'month', MONTHS);
+  Object.keys(TABS).forEach(function (n) { buildTab_(ss, n, TABS[n]); });
   buildCampaigns_(ss);
   buildHealth_(ss);
   orderTabs_(ss);
-  SpreadsheetApp.getActive().toast('Report rebuilt. Connect the Metabase extension to the `feed` tab.', 'Done', 8);
+  ss.toast('Rebuilt. Feed tab expected: "' + FEED + '"', 'Done', 8);
 }
-
-// ── helpers ────────────────────────────────────────────────────────────────
 
 function sheet_(ss, name, wipe) {
   var sh = ss.getSheetByName(name);
@@ -171,288 +172,244 @@ function sheet_(ss, name, wipe) {
 }
 
 function ensureFeedTab_(ss) {
-  var sh = ss.getSheetByName(FEED);
-  if (sh) return;                                  // never wipe a live feed
-  sh = ss.insertSheet(FEED);
+  if (ss.getSheetByName(FEED)) return;
+  var stale = ss.getSheetByName('feed');
+  var sh = ss.insertSheet(FEED);
   sh.getRange('A1').setValue(
-    'Connect the Metabase question "JM – Reporting Feed" to this tab. ' +
-    'Header row must land in row 1. Do not edit this tab by hand.');
-  sh.getRange('A1').setFontColor(C.note).setFontStyle('italic');
+    'Connect the Metabase question "JM – Reporting Feed" (57484) here. Header row in ' +
+    'row 1, 48 columns A:AV. Do not edit by hand.' +
+    (stale ? '  NOTE: a tab named "feed" also exists — the extension names it ' +
+             '"feed @ 57484", so the old one is stale and can be deleted.' : ''))
+    .setFontColor(C.note).setFontStyle('italic').setWrap(true);
 }
 
-/** Formula that pulls one metric for one row/period, by header NAME. */
-function cell_(level, rowLabelRef, marketRef, periodRef, metric) {
-  return '=IFERROR(INDEX(' + FEED + '!$A:$AL,' +
-         ' MATCH("' + level + '|"&' + rowLabelRef + '&"|"&' + marketRef + '&"|"&' + periodRef + ',' +
-         ' ' + FEED + '!$H:$H, 0),' +
-         ' MATCH("' + metric + '", ' + FEED + '!$1:$1, 0)), "")';
+/**
+ * Period label, counted back from the newest the feed holds.
+ * offset 0 = newest. The feed carries 7 weeks / 3 months; the KPI block asks
+ * for 2 and the chart for 4, so the window lives here rather than in the SQL.
+ */
+function periodAt_(level, grain, offsetFromNewest) {
+  return '=IFERROR(INDEX(SORT(UNIQUE(FILTER(' + FEED_REF + '!$E:$E,' +
+         ' ' + FEED_REF + '!$A:$A="' + level + '", ' + FEED_REF + '!$D:$D="' + grain + '",' +
+         ' ' + FEED_REF + '!$E:$E<>"")),1,FALSE), ' + (offsetFromNewest + 1) + '), "")';
 }
 
-// ── grid tabs ──────────────────────────────────────────────────────────────
+/** One metric for one row/period. Row by lookup_key, metric BY HEADER NAME. */
+function cell_(level, row, market, periodRef, metric) {
+  return '=IFERROR(INDEX(' + FEED_REF + '!' + COLS + ',' +
+         ' MATCH("' + level + '|' + row + '|' + market + '|"&' + periodRef + ',' +
+         ' ' + FEED_REF + '!' + KEY + ', 0),' +
+         ' MATCH("' + metric + '", ' + FEED_REF + '!$1:$1, 0)), "")';
+}
 
-function buildGrid_(ss, name, cfg, grain, nPeriods) {
-  var avgSpan = (grain === 'week') ? 4 : 3;   // periods in the rolling average
+function buildTab_(ss, name, cfg) {
+  var shape = SHAPES[cfg.shape];
   var sh = sheet_(ss, name, true);
-  var lastCol = 1 + nPeriods + 2;                  // label + periods + delta + avg
+  var isWeek = cfg.grain === 'week';
 
-  sh.getRange(1, 1).setValue(name)
-    .setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
-  sh.getRange(1, 1, 1, lastCol).setBackground(C.header);
-
+  sh.getRange(1, 1).setValue(name).setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
+  sh.getRange(1, 1, 1, 5).setBackground(C.header);
   sh.getRange('A2').setValue('Data through:');
-  sh.getRange('B2').setFormula(
-    '=IFERROR(TEXT(MAX(FILTER(' + FEED + '!$F:$F, ' + FEED + '!$A:$A="' + cfg.level + '")),"yyyy-mm-dd"),"— connect feed —")');
+  sh.getRange('B2').setFormula('=IFERROR(TEXT(MAX(FILTER(' + FEED_REF + '!$F:$F, ' +
+    FEED_REF + '!$A:$A="' + cfg.slides[0][1] + '", ' + FEED_REF + '!$D:$D="' + cfg.grain +
+    '")),"yyyy-mm-dd"),"— connect feed —")');
   sh.getRange('A3').setValue('Health:');
-  sh.getRange('B3').setFormula('=COUNTIF(' + FEED + '!$AK:$AK,"FAIL")&" checks failing — see Health tab"');
+  sh.getRange('B3').setFormula('=COUNTIF(' + FEED_REF + '!$AU:$AU,"FAIL")&" checks failing"')
+    .setFontColor(C.amberT);
   sh.getRange('A2:A3').setFontColor(C.note);
-  sh.getRange('B3').setFontColor(C.amberT);
 
   var row = 5;
-  cfg.blocks.forEach(function (blk) {
-    var label = blk[0], metric = blk[1], fmt = blk[2];
+  cfg.slides.forEach(function (sl) {
+    var label = sl[0], level = sl[1], market = sl[2], target = sl[3];
 
-    // block banner
-    sh.getRange(row, 1, 1, lastCol).setBackground(C.block);
-    sh.getRange(row, 1).setValue(label + '   ·   ' + metric)
-      .setFontWeight('bold').setFontSize(9);
-    row++;
-
-    // period header — computed, so a new period appears on its own
-    sh.getRange(row, 1).setValue(grain === 'week' ? 'Segment' : 'Row')
+    // ── slide title ────────────────────────────────────────────────────────
+    sh.getRange(row, 1, 1, 4).setBackground(C.block);
+    sh.getRange(row, 1).setValue(label + (target !== '' ? '     target ROAS ≥ ' + target : ''))
       .setFontWeight('bold');
-    for (var p = 0; p < nPeriods; p++) {
-      sh.getRange(row, 2 + p).setFormula(
-        '=IFERROR(INDEX(SORT(UNIQUE(FILTER(' + FEED + '!$E:$E,' +
-        ' ' + FEED + '!$A:$A="' + cfg.level + '", ' + FEED + '!$D:$D="' + grain + '",' +
-        ' ' + FEED + '!$E:$E<>"")),1,FALSE), ' + (p + 1) + '), "")');
-    }
-    sh.getRange(row, 2 + nPeriods).setValue(grain === 'week' ? 'WoW %' : 'MoM %');
-    sh.getRange(row, 3 + nPeriods).setValue(avgSpan + (grain === 'week' ? 'wk avg' : 'mo avg'));
-    sh.getRange(row, 1, 1, lastCol)
-      .setFontWeight('bold').setBackground(C.block).setBorder(null, null, true, null, null, null);
-    var headerRow = row;
     row++;
 
-    var firstDataRow = row;
-    cfg.rows.forEach(function (r) {
-      var rowLabel = r[0], market = r[1];
-      sh.getRange(row, 1).setValue(rowLabel + (market !== 'All' ? '  (' + market + ')' : ''));
-      for (var p = 0; p < nPeriods; p++) {
-        var colL = colLetter_(2 + p);
-        sh.getRange(row, 2 + p).setFormula(
-          cell_(cfg.level, '"' + rowLabel + '"', '"' + market + '"',
-                colL + '$' + headerRow, metric));
+    // ── KPI table: metrics as rows, oldest→newest, then % change ───────────
+    var hdr = row;
+    sh.getRange(row, 1).setValue('Date').setFontWeight('bold');
+    for (var k = KPI_PERIODS - 1; k >= 0; k--) {
+      sh.getRange(row, 1 + (KPI_PERIODS - k)).setFormula(periodAt_(level, cfg.grain, k));
+    }
+    sh.getRange(row, 2 + KPI_PERIODS).setValue('% change').setFontWeight('bold');
+    sh.getRange(row, 1, 1, 2 + KPI_PERIODS).setFontWeight('bold').setBackground(C.block);
+    row++;
+
+    var first = row;
+    shape.metrics.forEach(function (m) {
+      sh.getRange(row, 1).setValue(m[0]);
+      for (var k = KPI_PERIODS - 1; k >= 0; k--) {
+        var col = 1 + (KPI_PERIODS - k);
+        sh.getRange(row, col).setFormula(
+          cell_(level, label, market, colLetter_(col) + '$' + hdr, m[1]))
+          .setNumberFormat(m[2]);
       }
-      // Delta = latest vs prior. Rolling average spans the `avgSpan` periods
-      // BEFORE the latest, so it is a comparison baseline rather than a window
-      // that includes the number it is being compared against.
-      var cLatest = colLetter_(2), cPrior = colLetter_(3);
-      var cAvgEnd = colLetter_(2 + avgSpan);
-      sh.getRange(row, 2 + nPeriods).setFormula(
-        '=IFERROR(IF(' + cPrior + row + '=0,"",' + cLatest + row + '/' + cPrior + row + '-1),"")');
-      sh.getRange(row, 3 + nPeriods).setFormula(
-        '=IFERROR(AVERAGE(' + cPrior + row + ':' + cAvgEnd + row + '),"")');
+      var older = colLetter_(2), newer = colLetter_(1 + KPI_PERIODS);
+      sh.getRange(row, 2 + KPI_PERIODS)
+        .setFormula('=IFERROR(IF(' + older + row + '=0,"",' + newer + row + '/' + older + row + '-1),"")')
+        .setNumberFormat('+0.0%;-0.0%;0.0%');
       row++;
     });
+    if (shape.flag) addFlagRule_(sh, shape, level, label, first, shape.metrics.length, hdr);
+    row++;
 
-    var lastDataRow = row - 1;
-    sh.getRange(firstDataRow, 2, cfg.rows.length, nPeriods).setNumberFormat(fmt);
-    sh.getRange(firstDataRow, 2 + nPeriods, cfg.rows.length, 1).setNumberFormat('+0.0%;-0.0%;0.0%');
-    sh.getRange(firstDataRow, 3 + nPeriods, cfg.rows.length, 1).setNumberFormat(fmt);
-
-    // Flag-driven conditional format. The formula is anchored at the range's
-    // top-left, so $A<firstDataRow> offsets down per row and B$<headerRow>
-    // offsets across per column — that is what makes one rule cover the block.
-    // NOTE: the market is hardcoded '|All|' because every row on the two WoW
-    // grids is market 'All'. A grid with per-row markets (Site) needs its own
-    // rule per market, which is why Site's flagBlocks is empty.
-    if (cfg.flagCol && cfg.flagBlocks.indexOf(label) >= 0) {
-      var rng = sh.getRange(firstDataRow, 2, cfg.rows.length, nPeriods);
-      var colL = colLetter_(2);
-      var rule = SpreadsheetApp.newConditionalFormatRule()
-        .whenFormulaSatisfied(
-          '=IFERROR(INDEX(' + FEED + '!$' + cfg.flagCol + ':$' + cfg.flagCol + ',' +
-          ' MATCH("' + cfg.level + '|"&$A' + firstDataRow + '&"|All|"&' + colL + '$' + headerRow + ',' +
-          ' ' + FEED + '!$H:$H, 0))=FALSE, FALSE)')
-        .setBackground(cfg.flagStyle === 'amber' ? C.amber : C.grey)
-        .setFontColor(cfg.flagStyle === 'amber' ? C.amberT : C.greyT)
-        .setRanges([rng]).build();
-      var rules = sh.getConditionalFormatRules();
-      rules.push(rule);
-      sh.setConditionalFormatRules(rules);
+    // ── chart data: CHART_PERIODS periods, oldest → newest ─────────────────
+    sh.getRange(row, 1).setValue('Chart data  ·  ' + CHART_PERIODS +
+      (isWeek ? ' weeks' : ' months')).setFontSize(9).setFontColor(C.note);
+    row++;
+    var chdr = row;
+    sh.getRange(row, 1).setValue(isWeek ? 'Week' : 'Month').setFontWeight('bold');
+    shape.chart.forEach(function (m, i) { sh.getRange(row, 2 + i).setValue(m[0]).setFontWeight('bold'); });
+    row++;
+    for (var k = CHART_PERIODS - 1; k >= 0; k--) {
+      sh.getRange(row, 1).setFormula(periodAt_(level, cfg.grain, k));
+      shape.chart.forEach(function (m, i) {
+        sh.getRange(row, 2 + i)
+          .setFormula(cell_(level, label, market, '$A' + row, m[1]))
+          .setNumberFormat(m[2]);
+      });
+      row++;
     }
-    row++;   // spacer
+    sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length).setBorder(true, true, true, true, true, true);
+    row += 2;
   });
 
-  // targets, where set
-  var noteRow = row + 1;
-  var targets = cfg.rows.filter(function (r) { return r[2] !== ''; })
-    .map(function (r) { return r[0] + ' ≥ ' + r[2]; });
-  if (targets.length) {
-    sh.getRange(noteRow, 1).setValue('Targets:  ' + targets.join('   ·   '))
-      .setFontColor(C.note).setFontSize(9);
-  }
-  sh.getRange(noteRow + 1, 1).setValue(
-    cfg.flagStyle === 'amber'
-      ? 'Amber = real spend, conversions not reported (catalog segment missing). Act on it.'
-      : 'Grey = the underlying data does not exist for that period. Ignore, do not backfill.')
+  sh.getRange(row, 1).setValue(
+    shape.flagStyle === 'amber'
+      ? 'Amber = real Sephora spend with conversions unreported (no catalog-segment feedback). Act on it; do not fill it in.'
+      : 'Grey = the underlying data does not exist for that period. Ignore; do not backfill.')
     .setFontColor(C.note).setFontSize(9);
 
-  sh.setColumnWidth(1, 210);
-  for (var c = 2; c <= lastCol; c++) sh.setColumnWidth(c, 92);
-  sh.setFrozenRows(1);
+  sh.setColumnWidth(1, 150);
+  for (var c = 2; c <= 2 + KPI_PERIODS; c++) sh.setColumnWidth(c, 105);
   sh.setFrozenColumns(1);
 }
 
-// ── QUERY tabs ─────────────────────────────────────────────────────────────
+/** Anchored at the range top-left: $A<first> walks down, B$<hdr> walks across. */
+function addFlagRule_(sh, shape, level, label, first, nRows, hdr) {
+  var rng = sh.getRange(first, 2, nRows, KPI_PERIODS);
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(
+      '=IFERROR(INDEX(' + FEED_REF + '!' + shape.flag + ',' +
+      ' MATCH("' + level + '|' + label + '|All|"&' + colLetter_(2) + '$' + hdr + ',' +
+      ' ' + FEED_REF + '!' + KEY + ', 0))=FALSE, FALSE)')
+    .setBackground(shape.flagStyle === 'amber' ? C.amber : C.grey)
+    .setFontColor(shape.flagStyle === 'amber' ? C.amberT : C.greyT)
+    .setRanges([rng]).build();
+  var rules = sh.getConditionalFormatRules(); rules.push(rule);
+  sh.setConditionalFormatRules(rules);
+}
 
 function buildCampaigns_(ss) {
   var sh = sheet_(ss, 'Campaigns', true);
-  sh.getRange('A1').setValue('Campaigns')
-    .setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
-  sh.getRange('A1:K1').setBackground(C.header);
+  sh.getRange('A1').setValue('Campaigns').setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
+  sh.getRange('A1:I1').setBackground(C.header);
   sh.getRange('A2').setValue('Week:');
-  sh.getRange('B2').setFormula(
-    '=IFERROR(INDEX(SORT(UNIQUE(FILTER(' + FEED + '!$E:$E, ' + FEED + '!$A:$A="Campaign",' +
-    ' ' + FEED + '!$E:$E<>"")),1,FALSE),1),"")');
-  sh.getRange('A3').setValue('Read the read_metrics column: Sephora rows use cs_*, DTC rows use paid_*.')
+  sh.getRange('B2').setFormula(periodAt_('Campaign', 'week', 0));
+  sh.getRange('A3').setValue('read_metrics says which family applies: Sephora rows use cs_*, DTC rows use paid_*.')
     .setFontColor(C.note).setFontSize(9);
   sh.getRange('A5').setFormula(
-    '=IFERROR(QUERY(' + FEED + '!$A:$AL,' +
-    ' "select B, C, G, I, S, T, U, V, O, P, Q' +
-    '   where A = \'Campaign\' and E = \'"&$B$2&"\'' +
+    '=IFERROR(QUERY(' + FEED_REF + '!' + COLS + ',' +
+    ' "select B, C, G, I, O, Q, X, AB, AD' +
+    '   where A = \'Campaign\' and D = \'week\' and E = \'"&$B$2&"\'' +
     '   order by I desc' +
-    '   label B \'Campaign\', C \'Market\', G \'Read\', I \'Spend\', S \'cs purch\', T \'cs rev\',' +
-    ' U \'cs ROAS\', V \'cs CPA\', O \'paid purch\', P \'paid rev\', Q \'paid ROAS\'", 1),' +
-    ' "No campaign rows — connect the feed.")');
-  sh.setColumnWidth(1, 460);
-  sh.setFrozenRows(5);
+    '   label B \'Campaign\', C \'Market\', G \'Read\', I \'Spend\', O \'Paid purch\',' +
+    ' Q \'Paid ROAS\', X \'GA4 ROAS\', AB \'cs purch\', AD \'cs ROAS\'", 1),' +
+    ' "No rows — check the feed tab name is exactly: ' + FEED + '")');
+  sh.setColumnWidth(1, 460); sh.setFrozenRows(5);
 }
 
 function buildHealth_(ss) {
   var sh = sheet_(ss, 'Health', true);
-  sh.getRange('A1').setValue('Data Health')
-    .setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
+  sh.getRange('A1').setValue('Data Health').setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
   sh.getRange('A1:C1').setBackground(C.header);
-  sh.getRange('A2').setValue('Any FAIL here invalidates the numbers above it. Check before sending a report.')
+  sh.getRange('A2').setValue('Any FAIL invalidates the numbers above it. Check before sending a report.')
     .setFontColor(C.note).setFontSize(9);
   sh.getRange('A4').setFormula(
-    '=IFERROR(QUERY(' + FEED + '!$A:$AL,' +
-    ' "select B, AK, AL where A = \'Health\' order by AK desc, B' +
-    '   label B \'Check\', AK \'Status\', AL \'Detail\'", 1),' +
-    ' "No health rows — connect the feed.")');
-  var rules = [
-    SpreadsheetApp.newConditionalFormatRule()
-      .whenTextEqualTo('FAIL').setBackground('#f5e2dc').setFontColor('#96331f').setBold(true)
+    '=IFERROR(QUERY(' + FEED_REF + '!' + COLS + ',' +
+    ' "select B, AU, AV where A = \'Health\' order by AU desc, B' +
+    '   label B \'Check\', AU \'Status\', AV \'Detail\'", 1),' +
+    ' "No rows — check the feed tab name is exactly: ' + FEED + '")');
+  sh.setConditionalFormatRules([
+    SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo('FAIL')
+      .setBackground('#f5e2dc').setFontColor('#96331f').setBold(true)
       .setRanges([sh.getRange('A4:C200')]).build(),
-    SpreadsheetApp.newConditionalFormatRule()
-      .whenTextEqualTo('OK').setFontColor('#33604a')
-      .setRanges([sh.getRange('A4:C200')]).build()
-  ];
-  sh.setConditionalFormatRules(rules);
-  sh.setColumnWidth(1, 300); sh.setColumnWidth(2, 80); sh.setColumnWidth(3, 380);
+    SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo('OK')
+      .setFontColor('#33604a').setRanges([sh.getRange('A4:C200')]).build()
+  ]);
+  sh.setColumnWidth(1, 300); sh.setColumnWidth(2, 80); sh.setColumnWidth(3, 400);
   sh.setFrozenRows(4);
-}
-
-// ── Config + README ────────────────────────────────────────────────────────
-
-function writeConfig_(ss) {
-  var sh = sheet_(ss, 'Config', true);
-  var rows = [['tab', 'row_label', 'market', 'target']];
-  Object.keys(CONFIG).forEach(function (t) {
-    CONFIG[t].rows.forEach(function (r) { rows.push([t, r[0], r[1], r[2]]); });
-  });
-  MONTHLY.rows.forEach(function (r) { rows.push(['Monthly', r[0], r[1], r[2]]); });
-  sh.getRange(1, 1, rows.length, 4).setValues(rows);
-  sh.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground(C.block);
-  sh.getRange(rows.length + 2, 1).setValue(
-    'Reference only. Row order and targets live in the CONFIG object at the top of ' +
-    'the Apps Script — edit there and re-run buildReport. row_label must match the ' +
-    'feed\'s row_label exactly.').setFontColor(C.note).setFontSize(9).setWrap(true);
-  sh.setColumnWidth(1, 120); sh.setColumnWidth(2, 200);
 }
 
 function writeReadme_(ss) {
   var sh = sheet_(ss, 'README', true);
-  var lines = [
+  var L = [
     ['Josie Maran — Automated Reporting'],
     [''],
-    ['SEPHORA AND DTC ARE MEASURED DIFFERENTLY. NEVER MIX THEM.'],
-    ['Check column G (read_metrics) on the feed before reading any number. Sephora sells on'],
-    ['sephora.com — the purchase fires on Sephora\'s pixel against Sephora\'s catalog segment, so it'],
-    ['produces no Shopify order and no row in Meta\'s own purchases column. On the standard purchase'],
-    ['column the Sephora account shows 18 purchases on $566,802 of 2026 spend; on catalog segment'],
-    ['actions it has driven 6,797 purchases and $274,382 since March 2025.'],
+    ['FEED TAB: "' + FEED + '"  — the extension appends the question id (57484).'],
+    ['48 columns A:AV. Never edit, sort or format that tab.'],
     [''],
-    ['COLLAB AND TRAFFIC MUST NEVER BE AVERAGED.'],
-    ['Lifetime, on the deck\'s campaign IDs: US Collab $72,422 -> 1.14 ROAS ($36 CPA).'],
-    ['CA Collab $12,627 -> 2.93 ROAS ($14 CPA). US Traffic $202,850 and CA Traffic $66,321 ->'],
-    ['no catalog-segment conversions at all, because the campaigns currently defined as Traffic'],
-    ['are the new SB ones (no catalog linkage) plus TikTok (no conversion data of any kind).'],
-    ['In the week of 2026-08-31, Traffic was 94% of Sephora spend and Collab produced all 145'],
-    ['measured purchases.'],
+    ['LAYOUT MATCHES THE DECK. Each block is one slide: metrics down the rows,'],
+    ['two date columns plus % change, then a ' + CHART_PERIODS + '-period chart-data table.'],
+    ['The feed carries 7 weeks and 3 months; the window is applied here, so'],
+    ['changing it never means editing SQL.'],
     [''],
-    ['AMBER = REAL SPEND, UNREPORTED CONVERSIONS.'],
-    ['The new "SB - US/CA - Sephora ... Traffic" campaigns replaced the legacy traffic campaigns'],
-    ['around 2026-08-25 and emit no catalog-segment rows, while carrying ~92% of live Sephora spend.'],
-    ['The legacy collab campaigns still report daily, so the pipeline is healthy — this is a'],
-    ['campaign-setup gap. Kohl\'s traffic and the retired Engagement campaign have never emitted'],
-    ['any ($354,678 lifetime).'],
+    ['FOUR CONVERSION SOURCES. CHECK COLUMN G (read_metrics) FIRST.'],
+    ['  paid_*  Meta/Google own pixel, with a view-through window'],
+    ['  ga4_*   GA4 last-non-direct session attribution'],
+    ['  cs_*    Sephora, via catalog segment actions — the ONLY place it converts'],
+    ['  site_*  what Shopify actually booked'],
+    ['paid_roas and ga4_roas will disagree. The DTC slides show both. Never add them.'],
     [''],
-    ['62% OF US TRAFFIC CONVERSIONS ARE IN STORE, vs 7% of US Collab\'s. Traffic drives footfall,'],
-    ['collab drives sephora.com. Judging traffic on online ROAS alone understates it — though 0.04'],
-    ['is still 0.04.'],
+    ['WEEKS START ON SUNDAY, because the client asked for it. dbt_project.yml sets'],
+    ['week_start: Sunday and the packages honour it, so every weekly row is anchored'],
+    ['on a Sunday (2026-08-16 / 08-23 / 08-30 / 09-06).'],
     [''],
-    ['GREY = DTC BLENDED METRICS START THE WEEK OF 2026-07-27. NOTHING EARLIER.'],
-    ['Shopify order history begins there: 19 orders in the week of 07-20, then 2,737 in the week of'],
-    ['07-27. August 2026 is the only complete month, so no blended MoM until October and no blended'],
-    ['YoY this year. Paid-only DTC goes back further — Meta to 2023-07, Google to 2024-08. Sephora'],
-    ['is the opposite: 18 months of catalog-segment history, so Sephora MoM and YoY both work now.'],
+    ['GA4 CHANNEL MAPPING'],
+    ['  metaads / paidsocial -> Meta     google / cpc -> Google     else -> Other'],
+    ['TikTok has no mapping — no DTC TikTok campaigns exist. Google\'s'],
+    ['session_campaign_id is the campaign id; Meta\'s is <adset_id>_v2_sNN, so it'],
+    ['needs an adset->campaign lookup (99.2% resolves). GA4 that attaches to no'],
+    ['campaign appears on GA4 Channels as "Other" or "Unattributed Paid", so total'],
+    ['GA4 revenue reconciles instead of disappearing.'],
     [''],
-    ['21% OF DTC ORDERS ARE SUBSCRIPTION RENEWALS (4,226 of 19,636, $232,177) and 78% of orders are'],
-    ['repeat purchases. Site revenue moves largely independently of this week\'s spend. Against the'],
-    ['plan\'s 70 New / 20 Engaged / 10 Existing target, judge paid on new-customer CAC and % new'],
-    ['orders, not blended ROAS.'],
+    ['SEPHORA TRAFFIC HAS NO CONVERSION ROWS, AND THAT IS NOT AN OMISSION.'],
+    ['US/CA Traffic and @ Kohls emit no catalog-segment rows, so there is no honest'],
+    ['Sephora purchase figure. Those slides show delivery only. Amber = real spend,'],
+    ['conversions unreported. Collab does report: US 4.82 ROAS, CA 4.64 in the week'],
+    ['of 8/31, on 5% of Sephora spend and all 145 measured purchases.'],
     [''],
-    ['GOOGLE ADS RUNS ~8 DAYS BEHIND. Check the Health tab before comparing Google to another'],
-    ['channel in the current week. Google\'s ~1,100% ROAS is correct — branded search is run to a'],
-    ['deliberate 1,000% tROAS.'],
+    ['SEGMENTS COME FROM CAMPAIGN IDS, NOT NAMES — seeds/campaign_segments.csv in'],
+    ['bolt-josiemaran, from the reporting deck. An unmapped id gets segment'],
+    ['"Unmapped", appears on NO segment row, and is reported on the Health tab.'],
     [''],
-    ['SEGMENTS COME FROM CAMPAIGN IDS, NOT CAMPAIGN NAMES.'],
-    ['The mapping is seeds/campaign_segments.csv in bolt-josiemaran, taken from the reporting'],
-    ['deck. The account was inherited and carries three incompatible naming conventions, the same'],
-    ['objective spelled three ways, and region as us/US/ca/CA/USA — so names were never a safe'],
-    ['key. A campaign ID that is not in the mapping gets segment Unmapped, appears on NO segment'],
-    ['row, and is reported on the Health tab. When a campaign launches, add its ID to the CSV.'],
+    ['GREY = DTC BLENDED METRICS START THE WEEK OF 2026-07-27. Shopify order history'],
+    ['begins there. August 2026 is the only complete month, so no blended MoM until'],
+    ['October. Sephora has catalog-segment history from 2025-03; GA4 from 2024-08.'],
     [''],
-    ['The nine predecessors of the current structure all stopped spending by 2026-08-27 and are'],
-    ['intentionally unmapped ($44k over the trailing 30 days). That is the transition, not a gap.'],
+    ['GOOGLE ADS RUNS ~8 DAYS BEHIND. Its ~1,100% ROAS is correct — branded search'],
+    ['is run to a deliberate 1,000% tROAS.'],
     [''],
-    ['HOW THIS SHEET WORKS'],
-    ['feed        one Metabase question, written by the extension. Never edit, sort or format it.'],
-    ['grids       INDEX+MATCH into feed. Row matched on lookup_key (col H), metric matched by'],
-    ['            header NAME — so adding a column to the question will not break them.'],
-    ['Campaigns   one QUERY() formula. Health: one QUERY() formula.'],
-    ['Config      reference. Real config is the CONFIG object in the Apps Script.'],
-    ['To rebuild: Extensions → Apps Script → Run buildReport.']
+    ['TO REBUILD: Extensions -> Apps Script -> Run buildReport. Metric sets live in'],
+    ['SHAPES, slides in TABS, and the window in KPI_PERIODS / CHART_PERIODS.']
   ];
-  sh.getRange(1, 1, lines.length, 1).setValues(lines);
+  sh.getRange(1, 1, L.length, 1).setValues(L);
   sh.getRange(1, 1).setFontSize(14).setFontWeight('bold');
-  [3, 10, 15, 22, 26, 32, 37, 41, 45].forEach(function (r) {
-    sh.getRange(r, 1).setFontWeight('bold');
-  });
-  sh.setColumnWidth(1, 780);
-  sh.getRange(1, 1, lines.length, 1).setVerticalAlignment('top');
+  [3, 6, 11, 18, 22, 30, 36, 40, 44, 47].forEach(function (r) { sh.getRange(r, 1).setFontWeight('bold'); });
+  sh.setColumnWidth(1, 800);
+  sh.getRange(1, 1, L.length, 1).setVerticalAlignment('top');
 }
 
 function orderTabs_(ss) {
-  ['README', 'Health', 'Sephora WoW', 'DTC WoW', 'Monthly', 'Site', 'Campaigns', 'Config', FEED]
-    .forEach(function (name, i) {
-      var sh = ss.getSheetByName(name);
-      if (sh) { ss.setActiveSheet(sh); ss.moveActiveSheet(i + 1); }
-    });
-  var readme = ss.getSheetByName('README');
-  if (readme) ss.setActiveSheet(readme);
+  ['README','Health','DTC WoW','MTD','Sephora Traffic WoW','Sephora Collab WoW',
+   'MTD Sephora','GA4 Channels','Site','Campaigns', FEED].forEach(function (n, i) {
+    var sh = ss.getSheetByName(n);
+    if (sh) { ss.setActiveSheet(sh); ss.moveActiveSheet(i + 1); }
+  });
+  var r = ss.getSheetByName('README'); if (r) ss.setActiveSheet(r);
 }
 
 function colLetter_(n) {

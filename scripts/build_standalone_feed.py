@@ -27,7 +27,7 @@ import re, pathlib, sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DB   = "josiemaran"
 
-VARS = {"shopify_history_floor": "2026-03-25"}
+VARS = {"shopify_history_floor": "2026-03-25", "week_start": "Sunday"}
 
 # Models rendered as CTEs, in dependency order.
 # Only the four models we own. facebook_campaign_performance and
@@ -53,7 +53,8 @@ BASE_TABLES = {
 
 SOURCE_SCHEMAS = {
     "facebook_catalog_raw": "facebook_raw",
-    "jm_reporting":         "reporting",
+    "reporting":            "reporting",
+    "ga4_raw":              "ga4_raw",
 }
 
 
@@ -107,7 +108,17 @@ def expand_macros(sql: str, macros: dict, depth: int = 0) -> str:
                 for a in args]
         out = body
         for an, av in zip(arg_names, vals):
+            # 1. the plain `{{ arg }}` form
             out = re.sub(r"\{\{\s*" + re.escape(an) + r"\s*\}\}", av, out)
+            # 2. the arg passed on to a NESTED macro call, e.g.
+            #    jm_period_start's body contains `{{ jm_week_start(date_col) }}`.
+            #    Without this the nested call is expanded on a later pass with
+            #    the literal parameter NAME bound as its argument, and the SQL
+            #    comes out referencing a column called `date_col`. dbt's real
+            #    Jinja binds these correctly; this compiler has to be told.
+            out = re.sub(
+                r"(\{\{[^{}]*?)\b" + re.escape(an) + r"\b([^{}]*?\}\})",
+                lambda m: m.group(1) + av + m.group(2), out)
         return "(" + strip_jinja_comments(out).strip() + ")"
 
     new = pattern.sub(repl, sql)
@@ -125,9 +136,11 @@ def render_model(name: str, macros: dict) -> str:
     sql = strip_jinja_comments(sql)
     sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)          # block comments
 
-    # vars
+    # vars — both `var('x')` and `var('x', 'default')` forms
     for k, v in VARS.items():
-        sql = re.sub(r"\{\{\s*var\(\s*['\"]" + k + r"['\"]\s*\)\s*\}\}", v, sql)
+        sql = re.sub(
+            r"\{\{\s*var\(\s*['\"]" + k + r"['\"]\s*(?:,[^)]*)?\)\s*\}\}", v, sql)
+
 
     # source()
     def src(m):
@@ -137,6 +150,17 @@ def render_model(name: str, macros: dict) -> str:
 
     # macros (before ref, so a macro containing ref still resolves)
     sql = expand_macros(sql, macros)
+
+    # jm_week_start's body carries a `{% if %}` on var('week_start'). Resolve it
+    # here rather than shipping a Jinja engine — it only exists after the macro
+    # has been inlined above. Sunday is what dbt_project.yml sets and what every
+    # packaged reporting table reflects.
+    sql = re.sub(
+        r"\{%-?\s*set\s+ws\s*=.*?-?%\}\s*"
+        r"\{%-?\s*if\s+ws\.startswith\(\s*'sun'\s*\)\s*-?%\}"
+        r"(.*?)"
+        r"\{%-?\s*else\s*-?%\}.*?\{%-?\s*endif\s*-?%\}",
+        lambda m: m.group(1).strip(), sql, flags=re.S)
 
     # ref()
     def ref(m):
