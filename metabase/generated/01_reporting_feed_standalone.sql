@@ -1063,14 +1063,15 @@ select
     row_label,
     market,
     grain,
-    case grain when 'week'  then to_char(period_start, 'IYYY-"W"IW')
+
+    case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
                when 'month' then to_char(period_start, 'YYYY-MM')
                else '' end                                      as period_label,
     period_start,
     read_metrics,
 
     report_level || '|' || row_label || '|' || market || '|' ||
-        case grain when 'week'  then to_char(period_start, 'IYYY-"W"IW')
+        case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
                    when 'month' then to_char(period_start, 'YYYY-MM')
                    else '' end                                  as lookup_key,
 

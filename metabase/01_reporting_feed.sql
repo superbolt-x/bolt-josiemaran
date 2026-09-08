@@ -556,14 +556,20 @@ select
     row_label,
     market,
     grain,
-    case grain when 'week'  then to_char(period_start, 'IYYY-"W"IW')
+    -- Week label is the START DATE, not the ISO week number. Deck comment:
+    -- "Please pull in the data for this slide to match the dates presented.
+    --  The client views data from Sunday - Saturday."
+    -- ISO numbering made this ambiguous: 2026-08-30 is a Sunday whose ISO week
+    -- is 35 (Mon 24 - Sun 30), so the week STARTING 08-30 labelled itself
+    -- "2026-W35" and read as the week before. The deck calls it 8/30/2026.
+    case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
                when 'month' then to_char(period_start, 'YYYY-MM')
                else '' end                                      as period_label,
     period_start,
     read_metrics,
 
     report_level || '|' || row_label || '|' || market || '|' ||
-        case grain when 'week'  then to_char(period_start, 'IYYY-"W"IW')
+        case grain when 'week'  then to_char(period_start, 'FMMM/FMDD/YYYY')
                    when 'month' then to_char(period_start, 'YYYY-MM')
                    else '' end                                  as lookup_key,
 
