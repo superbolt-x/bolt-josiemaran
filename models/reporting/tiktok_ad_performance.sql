@@ -47,10 +47,6 @@ cost as spend,
 impressions,
 clicks,
 complete_payment as purchases,
-total_purchase_value as revenue,          -- was: total_complete_payment_rate (a RATE)
-web_event_add_to_cart as add_to_cart,     -- was: atc (inconsistent with every other model)
-total_purchase,
-total_purchase_value,
-complete_payment,
-value_per_complete_payment
+total_complete_payment_rate as revenue,
+web_event_add_to_cart as atc
 FROM {{ ref('tiktok_performance_by_ad') }}
