@@ -366,7 +366,7 @@ select
         case
             -- Google: the session campaign id IS the campaign id
             when g.session_source_medium = 'google / cpc'
-                 and g.session_campaign_id similar to '[0-9]+'
+                 and g.session_campaign_id ~ '^[0-9]+$'
                  then g.session_campaign_id
             -- Meta: prefix is the adset id -> look up its campaign
             when g.session_source_medium = 'metaads / paidsocial'
@@ -416,13 +416,55 @@ select * from blended_performance__meta
     union all select * from blended_performance__tiktok
 ),
 
+blended_performance__paid_ga4 as (
+select
+        coalesce(p.platform,         g.platform)         as platform,
+        coalesce(p.campaign_id,      g.campaign_id)      as campaign_id,
+        coalesce(p.date,             g.date)             as date,
+        coalesce(p.date_granularity, g.date_granularity) as date_granularity,
+        p.platform is not null                           as has_paid,
+
+        p.channel,
+        p.campaign_name,
+        p.spend,
+        p.impressions,
+        p.clicks,
+        p.paid_purchases,
+        p.paid_revenue,
+        p.paid_add_to_cart,
+        p.cs_purchases,
+        p.cs_revenue,
+        p.cs_offline_purchases,
+        p.cs_add_to_cart,
+
+        g.ga4_sessions,
+        g.ga4_purchases,
+        g.ga4_revenue
+
+    from blended_performance__paid_union p
+    full outer join blended_performance__ga4 g
+        on  g.platform         = p.platform
+        and g.campaign_id      = p.campaign_id
+        and g.date             = p.date
+        and g.date_granularity = p.date_granularity
+),
+
 blended_performance__paid as (
 select
-        p.channel,
-        coalesce(s.segment, 'Unmapped')                     as segment,
-        coalesce(s.business_line, 'Unmapped')               as business_line,
-        coalesce(s.dtc_overall, false)                      as in_dtc_overall,
-        (case
+        case when pg.has_paid then pg.channel else 'GA4' end   as channel,
+
+        case when pg.has_paid then coalesce(s.segment, 'Unmapped')
+             when pg.platform = 'other' then 'Other'
+             else 'Unattributed Paid' end                      as segment,
+
+        case when pg.has_paid then coalesce(s.business_line, 'Unmapped')
+             else 'DTC' end                                    as business_line,
+
+        case when pg.has_paid then coalesce(s.dtc_overall, false)
+             else false end                                    as in_dtc_overall,
+
+        case when pg.has_paid
+                  then (case
         when coalesce(s.segment, 'Unmapped') like '%US%' then 'US'
         when coalesce(s.segment, 'Unmapped') like '%CA%' then 'CA'
         -- Kohl's and the two DTC rollups carry no region token in the segment
@@ -431,77 +473,30 @@ select
         when coalesce(s.segment, 'Unmapped') in ('Meta Overall', 'Google Overall',
                               'Sephora @ Kohls')                then 'US'
         else 'Unknown'
-    end) as market,
-        cast(null as varchar(16))                           as order_type,
-        p.campaign_id,
-        p.campaign_name,
-        p.date,
-        p.date_granularity,
+    end)
+             else 'Unknown' end                                as market,
 
-        p.spend,
-        p.impressions,
-        p.clicks,
-        p.paid_purchases,
-        p.paid_revenue,
-        p.paid_add_to_cart,
-
-        p.cs_purchases,
-        p.cs_revenue,
-        p.cs_offline_purchases,
-        p.cs_add_to_cart,
-
-        g.ga4_sessions,
-        g.ga4_purchases,
-        g.ga4_revenue,
-
-        cast(null as bigint)           as shopify_orders,
-        cast(null as bigint)           as shopify_first_orders,
-        cast(null as bigint)           as shopify_repeat_orders,
-        cast(null as bigint)           as shopify_new_customers,
-        cast(null as double precision) as shopify_gross_sales,
-        cast(null as double precision) as shopify_total_sales,
-        cast(null as double precision) as shopify_discounts
-
-    from blended_performance__paid_union p
-    left join blended_performance__segment_map s
-        on  s.platform    = p.platform
-        and s.campaign_id = p.campaign_id
-    left join blended_performance__ga4 g
-        on  g.platform         = p.platform
-        and g.campaign_id      = p.campaign_id
-        and g.date             = p.date
-        and g.date_granularity = p.date_granularity
-),
-
-blended_performance__ga4_unattached as (
-select
-        'GA4'                          as channel,
-        case when g.platform = 'other' then 'Other'
-             else 'Unattributed Paid' end as segment,
-        'DTC'                          as business_line,
-        false                          as in_dtc_overall,
-        'Unknown'                      as market,
         cast(null as varchar(16))      as order_type,
-        cast(null as varchar(64))      as campaign_id,
-        cast(null as varchar(256))     as campaign_name,
-        g.date,
-        g.date_granularity,
+        pg.campaign_id,
+        pg.campaign_name,
+        pg.date,
+        pg.date_granularity,
 
-        cast(null as double precision) as spend,
-        cast(null as bigint)           as impressions,
-        cast(null as double precision) as clicks,
-        cast(null as double precision) as paid_purchases,
-        cast(null as double precision) as paid_revenue,
-        cast(null as double precision) as paid_add_to_cart,
+        pg.spend,
+        pg.impressions,
+        pg.clicks,
+        pg.paid_purchases,
+        pg.paid_revenue,
+        pg.paid_add_to_cart,
 
-        cast(null as double precision) as cs_purchases,
-        cast(null as double precision) as cs_revenue,
-        cast(null as double precision) as cs_offline_purchases,
-        cast(null as double precision) as cs_add_to_cart,
+        pg.cs_purchases,
+        pg.cs_revenue,
+        pg.cs_offline_purchases,
+        pg.cs_add_to_cart,
 
-        sum(g.ga4_sessions)            as ga4_sessions,
-        sum(g.ga4_purchases)           as ga4_purchases,
-        sum(g.ga4_revenue)             as ga4_revenue,
+        pg.ga4_sessions,
+        pg.ga4_purchases,
+        pg.ga4_revenue,
 
         cast(null as bigint)           as shopify_orders,
         cast(null as bigint)           as shopify_first_orders,
@@ -511,23 +506,10 @@ select
         cast(null as double precision) as shopify_total_sales,
         cast(null as double precision) as shopify_discounts
 
-    
-    from blended_performance__ga4 g
-    left join (
-        select distinct
-            platform,
-            campaign_id,
-            date,
-            date_granularity,
-            1 as matched
-        from blended_performance__paid_union
-    ) p
-        on  p.platform         = g.platform
-        and p.campaign_id      = g.campaign_id
-        and p.date             = g.date
-        and p.date_granularity = g.date_granularity
-    where p.matched is null
-    group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    from blended_performance__paid_ga4 pg
+    left join blended_performance__segment_map s
+        on  s.platform    = pg.platform
+        and s.campaign_id = pg.campaign_id
 ),
 
 blended_performance__site as (
@@ -572,8 +554,6 @@ select
 
 blended_performance as (
 select * from blended_performance__paid
-union all
-select * from blended_performance__ga4_unattached
 union all
 select * from blended_performance__site
 ),

@@ -125,7 +125,20 @@ def main(path):
           + ("" if not corr else f"  → {len(corr)} found"))
     if corr: fails.append("correlated-subquery")
 
-    # 8 — namespacing leaked into a string literal
+    # 8 — a CTE referenced more than once, where one reference sits inside a
+    # join predicate. Redshift throws "This type of correlated subquery pattern
+    # is not supported" for that plan shape even though every piece is valid on
+    # its own. Warn rather than fail: multiple plain FROM references are fine,
+    # it is the join-predicate combination that breaks.
+    defined_ctes = set(re.findall(r"(?m)^(\w+) as \($", sql))
+    multi = sorted(
+        c for c in defined_ctes
+        if len(re.findall(rf"(?i)(?:from|join)\s+{re.escape(c)}\b", sql)) > 1
+    )
+    print(f"{'✓' if not multi else '!'} no CTE referenced more than once"
+          + ("" if not multi else f"  → {multi} (check none is in a join predicate)"))
+
+    # 9 — namespacing leaked into a string literal
     # The compiler prefixes a model's internal CTE names to avoid collisions.
     # If that rewrite touches a string literal it corrupts DATA, not just
     # identifiers — 'google' became 'blended_performance__google' once, which

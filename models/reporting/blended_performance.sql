@@ -252,7 +252,7 @@ ga4_daily as (
         case
             -- Google: the session campaign id IS the campaign id
             when g.session_source_medium = 'google / cpc'
-                 and g.session_campaign_id similar to '[0-9]+'
+                 and g.session_campaign_id ~ '^[0-9]+$'
                  then g.session_campaign_id
             -- Meta: prefix is the adset id -> look up its campaign
             when g.session_source_medium = 'metaads / paidsocial'
@@ -299,27 +299,41 @@ paid_union as (
     union all select * from tiktok
 ),
 
-paid as (
+paid_ga4 as (
+
+    /*  ONE full outer join, so `paid_union` and `ga4` are each referenced
+        EXACTLY ONCE in this model.
+
+        The previous shape referenced both twice — once inside a join predicate
+        and once as a FROM (paid LEFT JOIN ga4, then ga4 anti-joined back
+        against paid_union). Redshift rejects that outright:
+
+            This type of correlated subquery pattern is not supported
+            due to internal error
+
+        Every piece ran fine in isolation against the warehouse; it is the
+        double reference the planner will not take. A full outer join gives
+        both sides in one pass: matched rows carry spend AND ga4, GA4-only rows
+        arrive with p.* NULL, and `has_paid` tells them apart. No anti-join.
+
+        NULL campaign_id never equals NULL, so GA4 'Other' rows land on the
+        GA4-only side exactly as they did before.                            */
 
     select
-        p.channel,
-        coalesce(s.segment, 'Unmapped')                     as segment,
-        coalesce(s.business_line, 'Unmapped')               as business_line,
-        coalesce(s.dtc_overall, false)                      as in_dtc_overall,
-        {{ jm_market_from_segment("coalesce(s.segment, 'Unmapped')") }} as market,
-        cast(null as varchar(16))                           as order_type,
-        p.campaign_id,
-        p.campaign_name,
-        p.date,
-        p.date_granularity,
+        coalesce(p.platform,         g.platform)         as platform,
+        coalesce(p.campaign_id,      g.campaign_id)      as campaign_id,
+        coalesce(p.date,             g.date)             as date,
+        coalesce(p.date_granularity, g.date_granularity) as date_granularity,
+        p.platform is not null                           as has_paid,
 
+        p.channel,
+        p.campaign_name,
         p.spend,
         p.impressions,
         p.clicks,
         p.paid_purchases,
         p.paid_revenue,
         p.paid_add_to_cart,
-
         p.cs_purchases,
         p.cs_revenue,
         p.cs_offline_purchases,
@@ -327,21 +341,10 @@ paid as (
 
         g.ga4_sessions,
         g.ga4_purchases,
-        g.ga4_revenue,
-
-        cast(null as bigint)           as shopify_orders,
-        cast(null as bigint)           as shopify_first_orders,
-        cast(null as bigint)           as shopify_repeat_orders,
-        cast(null as bigint)           as shopify_new_customers,
-        cast(null as double precision) as shopify_gross_sales,
-        cast(null as double precision) as shopify_total_sales,
-        cast(null as double precision) as shopify_discounts
+        g.ga4_revenue
 
     from paid_union p
-    left join segment_map s
-        on  s.platform    = p.platform
-        and s.campaign_id = p.campaign_id
-    left join ga4 g
+    full outer join ga4 g
         on  g.platform         = p.platform
         and g.campaign_id      = p.campaign_id
         and g.date             = p.date
@@ -349,46 +352,55 @@ paid as (
 
 ),
 
--- ─── GA4 rows with nowhere to attach ────────────────────────────────────────
+paid as (
 
-ga4_unattached as (
+    /*  Paid rows and GA4-only rows in one select, keyed off has_paid. They
+        share an identical column set, so splitting them cost a second
+        reference to the join for nothing.
 
-    /*  Everything GA4 measured that is NOT already on a paid row: the 'Other'
-        bucket (email, SMS, organic, direct, affiliates), Meta sessions whose
-        adset did not resolve to a campaign, and paid campaigns that drove
-        sessions on a day they had no spend.
-
-        Disjoint from the joined set by construction, so ga4_revenue summed
-        across the whole table equals the GA4 table total.  */
+        A GA4-only row with a non-NULL campaign_id is a campaign that drove
+        sessions in a period it had no spend. 'Unattributed Paid' still fits —
+        paid source, not attached to spend — and it keeps GA4 reconciling
+        exactly against the raw table.                                       */
 
     select
-        'GA4'                          as channel,
-        case when g.platform = 'other' then 'Other'
-             else 'Unattributed Paid' end as segment,
-        'DTC'                          as business_line,
-        false                          as in_dtc_overall,
-        'Unknown'                      as market,
+        case when pg.has_paid then pg.channel else 'GA4' end   as channel,
+
+        case when pg.has_paid then coalesce(s.segment, 'Unmapped')
+             when pg.platform = 'other' then 'Other'
+             else 'Unattributed Paid' end                      as segment,
+
+        case when pg.has_paid then coalesce(s.business_line, 'Unmapped')
+             else 'DTC' end                                    as business_line,
+
+        case when pg.has_paid then coalesce(s.dtc_overall, false)
+             else false end                                    as in_dtc_overall,
+
+        case when pg.has_paid
+                  then {{ jm_market_from_segment("coalesce(s.segment, 'Unmapped')") }}
+             else 'Unknown' end                                as market,
+
         cast(null as varchar(16))      as order_type,
-        cast(null as varchar(64))      as campaign_id,
-        cast(null as varchar(256))     as campaign_name,
-        g.date,
-        g.date_granularity,
+        pg.campaign_id,
+        pg.campaign_name,
+        pg.date,
+        pg.date_granularity,
 
-        cast(null as double precision) as spend,
-        cast(null as bigint)           as impressions,
-        cast(null as double precision) as clicks,
-        cast(null as double precision) as paid_purchases,
-        cast(null as double precision) as paid_revenue,
-        cast(null as double precision) as paid_add_to_cart,
+        pg.spend,
+        pg.impressions,
+        pg.clicks,
+        pg.paid_purchases,
+        pg.paid_revenue,
+        pg.paid_add_to_cart,
 
-        cast(null as double precision) as cs_purchases,
-        cast(null as double precision) as cs_revenue,
-        cast(null as double precision) as cs_offline_purchases,
-        cast(null as double precision) as cs_add_to_cart,
+        pg.cs_purchases,
+        pg.cs_revenue,
+        pg.cs_offline_purchases,
+        pg.cs_add_to_cart,
 
-        sum(g.ga4_sessions)            as ga4_sessions,
-        sum(g.ga4_purchases)           as ga4_purchases,
-        sum(g.ga4_revenue)             as ga4_revenue,
+        pg.ga4_sessions,
+        pg.ga4_purchases,
+        pg.ga4_revenue,
 
         cast(null as bigint)           as shopify_orders,
         cast(null as bigint)           as shopify_first_orders,
@@ -398,33 +410,13 @@ ga4_unattached as (
         cast(null as double precision) as shopify_total_sales,
         cast(null as double precision) as shopify_discounts
 
-    /*  Anti-join as LEFT JOIN + IS NULL, not NOT EXISTS. Redshift rejects the
-        correlated form outright — "This type of correlated subquery pattern is
-        not supported due to internal error" — once there is more than one
-        correlation predicate against a CTE.
-
-        `matched` is a sentinel rather than testing p.campaign_id IS NULL: a
-        paid row could itself carry a NULL campaign_id, and then the anti-join
-        marker and the data would be indistinguishable. The DISTINCT keeps the
-        join from multiplying GA4 rows.                                       */
-    from ga4 g
-    left join (
-        select distinct
-            platform,
-            campaign_id,
-            date,
-            date_granularity,
-            1 as matched
-        from paid_union
-    ) p
-        on  p.platform         = g.platform
-        and p.campaign_id      = g.campaign_id
-        and p.date             = g.date
-        and p.date_granularity = g.date_granularity
-    where p.matched is null
-    group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    from paid_ga4 pg
+    left join segment_map s
+        on  s.platform    = pg.platform
+        and s.campaign_id = pg.campaign_id
 
 ),
+
 
 -- ─── SITE ───────────────────────────────────────────────────────────────────
 
@@ -471,7 +463,5 @@ site as (
 )
 
 select * from paid
-union all
-select * from ga4_unattached
 union all
 select * from site
