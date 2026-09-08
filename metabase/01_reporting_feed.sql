@@ -30,11 +30,20 @@
 with
 
 wk as (
+    /*  Both bounds use the SUNDAY anchor, matching week_start: 'Sunday'.
+
+        `date_trunc('week', current_date)` returns the ISO MONDAY. On Tue 8 Sep
+        that is Mon 7 Sep, so `date < '2026-09-07'` fails to exclude the
+        Sunday-anchored week beginning 6 Sep — and the report showed a 3-day
+        partial week as if it were complete. Spend read -65.5% WoW.
+
+        (date_trunc('week', current_date + 1) - 1) gives the Sunday of the
+        current week, so `<` excludes the week in progress.                  */
     select *
     from reporting.josiemaran_blended_performance
     where date_granularity = 'week'
-      and date >= date_trunc('week', current_date) - interval '7 week'
-      and date <  date_trunc('week', current_date)      -- exclude in-progress week
+      and date >= (date_trunc('week', current_date + 1) - 1)::date - interval '7 week'
+      and date <  (date_trunc('week', current_date + 1) - 1)::date
 ),
 
 mo as (

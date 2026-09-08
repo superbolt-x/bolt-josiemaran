@@ -253,7 +253,22 @@ function buildTab_(ss, name, cfg) {
         .setNumberFormat('+0.0%;-0.0%;0.0%');
       row++;
     });
-    if (shape.flag) addFlagRule_(sh, shape, level, label, first, shape.metrics.length, hdr);
+    // Conditional formats cannot reference another sheet, so the flag has to be
+    // pulled onto this one first. One hidden row per block, one cell per period.
+    if (shape.flag) {
+      var flagRow = row;
+      sh.getRange(flagRow, 1).setValue('flag (hidden)');
+      for (var k = KPI_PERIODS - 1; k >= 0; k--) {
+        var fc = 1 + (KPI_PERIODS - k);
+        sh.getRange(flagRow, fc).setFormula(
+          '=IFERROR(INDEX(' + FEED_REF + '!' + shape.flag + ',' +
+          ' MATCH("' + level + '|' + label + '|' + market + '|"&' +
+          colLetter_(fc) + '$' + hdr + ', ' + FEED_REF + '!' + KEY + ', 0)), TRUE)');
+      }
+      sh.hideRows(flagRow);
+      addFlagRule_(sh, shape, first, shape.metrics.length, flagRow);
+      row++;
+    }
     row++;
 
     // ── chart data: CHART_PERIODS periods, oldest → newest ─────────────────
@@ -288,14 +303,19 @@ function buildTab_(ss, name, cfg) {
   sh.setFrozenColumns(1);
 }
 
-/** Anchored at the range top-left: $A<first> walks down, B$<hdr> walks across. */
-function addFlagRule_(sh, shape, level, label, first, nRows, hdr) {
+/**
+ * Google Sheets rejects a conditional-format formula that references another
+ * sheet — "Conditional format rule cannot reference a different sheet." So the
+ * rule points at a hidden row on THIS sheet, which does the cross-sheet lookup.
+ *
+ * The formula is anchored at the range's top-left, so B$<flagRow> keeps the row
+ * pinned while the column walks across with the period columns. One rule covers
+ * the whole block.
+ */
+function addFlagRule_(sh, shape, first, nRows, flagRow) {
   var rng = sh.getRange(first, 2, nRows, KPI_PERIODS);
   var rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied(
-      '=IFERROR(INDEX(' + FEED_REF + '!' + shape.flag + ',' +
-      ' MATCH("' + level + '|' + label + '|All|"&' + colLetter_(2) + '$' + hdr + ',' +
-      ' ' + FEED_REF + '!' + KEY + ', 0))=FALSE, FALSE)')
+    .whenFormulaSatisfied('=' + colLetter_(2) + '$' + flagRow + '=FALSE')
     .setBackground(shape.flagStyle === 'amber' ? C.amber : C.grey)
     .setFontColor(shape.flagStyle === 'amber' ? C.amberT : C.greyT)
     .setRanges([rng]).build();

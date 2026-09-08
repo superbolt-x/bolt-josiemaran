@@ -559,11 +559,12 @@ select * from blended_performance__site
 ),
 
 wk as (
+    
     select *
     from blended_performance
     where date_granularity = 'week'
-      and date >= date_trunc('week', current_date) - interval '7 week'
-      and date <  date_trunc('week', current_date)      -- exclude in-progress week
+      and date >= (date_trunc('week', current_date + 1) - 1)::date - interval '7 week'
+      and date <  (date_trunc('week', current_date + 1) - 1)::date
 ),
 
 mo as (
