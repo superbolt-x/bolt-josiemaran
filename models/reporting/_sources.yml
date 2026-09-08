@@ -27,6 +27,10 @@ sources:
       - name: josiemaran_googleads_performance_by_campaign
       - name: josiemaran_tiktok_performance_by_campaign
       - name: josiemaran_shopify_daily_sales_by_order
+      - name: josiemaran_facebook_performance_by_ad
+        description: >
+          Ad grain. Used only for the adset_id → campaign_id lookup that GA4's
+          Meta sessions need. Verified unique: no adset maps to two campaigns.
 
   # ── Raw Facebook catalog-segment insights ──────────────────────────────────
   # The Facebook package does not surface these, so they are declared here.
@@ -51,3 +55,24 @@ sources:
               across action_type; always pivot named types.
       - name: campaigns_insights_catalog_segment_value
         description: "Conversion VALUES by action_type. Same grain, same nesting rule."
+
+  # ── GA4 ─────────────────────────────────────────────────────────────────────
+  # Read straight from raw — there is no reporting model for GA4 and it does not
+  # need one. Daily grain, one property, history from 2024-08-17 (deeper than
+  # Shopify order history, which starts 2026-07-27).
+  - name: ga4_raw
+    schema: ga4_raw
+    tables:
+      - name: traffic_sources_session
+        description: >
+          Session-level traffic sources with purchase conversions. `session_
+          campaign_id` is directly usable for Google Ads but NOT for Meta —
+          see the ga4_resolved CTE in blended_performance.
+        columns:
+          - name: session_campaign_id
+            description: >
+              Google: the real campaign ID (14 distinct numeric values).
+              Meta: `<adset_id>_v2_sNN` — the prefix is the ADSET id, not the
+              campaign id, so it needs split_part + an adset→campaign lookup.
+              1,438 of 1,456 distinct Meta values match `^[0-9]{15,20}_`, 13
+              are bare adset ids, 5 are neither.

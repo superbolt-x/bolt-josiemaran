@@ -54,6 +54,7 @@ BASE_TABLES = {
 SOURCE_SCHEMAS = {
     "facebook_catalog_raw": "facebook_raw",
     "jm_reporting":         "reporting",
+    "ga4_raw":              "ga4_raw",
 }
 
 

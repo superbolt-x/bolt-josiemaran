@@ -94,13 +94,13 @@ select 'day'     as date_granularity
 facebook_catalog_segment_performance__spined as (
 select
         g.date_granularity,
-        case g.date_granularity
-            when 'day'     then p.date
-            when 'week'    then date_trunc('week',    p.date)::date
-            when 'month'   then date_trunc('month',   p.date)::date
-            when 'quarter' then date_trunc('quarter', p.date)::date
-            when 'year'    then date_trunc('year',    p.date)::date
-        end as date,
+        (case g.date_granularity
+        when 'day'     then p.date
+        when 'week'    then (date_trunc('week', p.date + 1) - 1)::date
+        when 'month'   then date_trunc('month',   p.date)::date
+        when 'quarter' then date_trunc('quarter', p.date)::date
+        when 'year'    then date_trunc('year',    p.date)::date
+    end) as date,
         p.campaign_id,
         p.cs_purchases, p.cs_revenue,
         p.cs_purchases_7d_click, p.cs_purchases_1d_view,
@@ -183,13 +183,13 @@ select 'day'     as date_granularity
 shopify_sales_by_segment__spine as (
 select
         g.date_granularity,
-        case g.date_granularity
-            when 'day'     then o.date
-            when 'week'    then date_trunc('week',    o.date)::date
-            when 'month'   then date_trunc('month',   o.date)::date
-            when 'quarter' then date_trunc('quarter', o.date)::date
-            when 'year'    then date_trunc('year',    o.date)::date
-        end                        as date,
+        (case g.date_granularity
+        when 'day'     then o.date
+        when 'week'    then (date_trunc('week', o.date + 1) - 1)::date
+        when 'month'   then date_trunc('month',   o.date)::date
+        when 'quarter' then date_trunc('quarter', o.date)::date
+        when 'year'    then date_trunc('year',    o.date)::date
+    end) as date,
         o.date                     as order_date,
         o.market,
         o.order_type,
@@ -345,6 +345,71 @@ select
     group by 1, 2, 3, 4, 5, 6
 ),
 
+blended_performance__fb_adset_to_campaign as (
+select
+        adset_id::varchar               as adset_id,
+        max(campaign_id::varchar)       as campaign_id
+    from reporting.josiemaran_facebook_performance_by_ad
+    where date_granularity = 'day'
+      and adset_id is not null
+    group by 1
+),
+
+blended_performance__ga4_daily as (
+select
+        g.date,
+        case g.session_source_medium
+            when 'metaads / paidsocial' then 'meta'
+            when 'google / cpc'         then 'google'
+            else 'other'
+        end                                                     as platform,
+        case
+            -- Google: the session campaign id IS the campaign id
+            when g.session_source_medium = 'google / cpc'
+                 and g.session_campaign_id similar to '[0-9]+'
+                 then g.session_campaign_id
+            -- Meta: prefix is the adset id -> look up its campaign
+            when g.session_source_medium = 'metaads / paidsocial'
+                 then a.campaign_id
+        end                                                     as campaign_id,
+        sum(g.sessions)                                         as ga4_sessions,
+        sum(g.conversions_purchase)                             as ga4_purchases,
+        sum(g.purchase_revenue)                                 as ga4_revenue
+    from ga4_raw.traffic_sources_session g
+    left join blended_performance__fb_adset_to_campaign a
+        on  g.session_source_medium = 'metaads / paidsocial'
+        and a.adset_id = split_part(g.session_campaign_id, '_', 1)
+    group by 1, 2, 3
+),
+
+blended_performance__ga4_grains as (
+select 'day'     as date_granularity
+    union all select 'week'
+    union all select 'month'
+    union all select 'quarter'
+    union all select 'year'
+),
+
+blended_performance__ga4 as (
+select
+        gr.date_granularity,
+        (case gr.date_granularity
+        when 'day'     then d.date
+        when 'week'    then (date_trunc('week', d.date + 1) - 1)::date
+        when 'month'   then date_trunc('month',   d.date)::date
+        when 'quarter' then date_trunc('quarter', d.date)::date
+        when 'year'    then date_trunc('year',    d.date)::date
+    end) as date,
+        d.platform,
+        d.campaign_id,
+        sum(d.ga4_sessions)             as ga4_sessions,
+        sum(d.ga4_purchases)            as ga4_purchases,
+        sum(d.ga4_revenue)              as ga4_revenue
+    from blended_performance__ga4_daily d
+    cross join blended_performance__ga4_grains gr
+    group by 1, 2, 3, 4
+),
+
 blended_performance__paid_union as (
 select * from blended_performance__meta
     union all select * from blended_performance__google
@@ -385,6 +450,10 @@ select
         p.cs_offline_purchases,
         p.cs_add_to_cart,
 
+        g.ga4_sessions,
+        g.ga4_purchases,
+        g.ga4_revenue,
+
         cast(null as bigint)           as shopify_orders,
         cast(null as bigint)           as shopify_first_orders,
         cast(null as bigint)           as shopify_repeat_orders,
@@ -397,6 +466,60 @@ select
     left join blended_performance__segment_map s
         on  s.platform    = p.platform
         and s.campaign_id = p.campaign_id
+    left join blended_performance__ga4 g
+        on  g.platform         = p.platform
+        and g.campaign_id      = p.campaign_id
+        and g.date             = p.date
+        and g.date_granularity = p.date_granularity
+),
+
+blended_performance__ga4_unattached as (
+select
+        'GA4'                          as channel,
+        case when g.platform = 'other' then 'Other'
+             else 'Unattributed Paid' end as segment,
+        'DTC'                          as business_line,
+        false                          as in_dtc_overall,
+        'Unknown'                      as market,
+        cast(null as varchar(16))      as order_type,
+        cast(null as varchar(64))      as campaign_id,
+        cast(null as varchar(256))     as campaign_name,
+        g.date,
+        g.date_granularity,
+
+        cast(null as double precision) as spend,
+        cast(null as bigint)           as impressions,
+        cast(null as double precision) as clicks,
+        cast(null as double precision) as paid_purchases,
+        cast(null as double precision) as paid_revenue,
+        cast(null as double precision) as paid_add_to_cart,
+
+        cast(null as double precision) as cs_purchases,
+        cast(null as double precision) as cs_revenue,
+        cast(null as double precision) as cs_offline_purchases,
+        cast(null as double precision) as cs_add_to_cart,
+
+        sum(g.ga4_sessions)            as ga4_sessions,
+        sum(g.ga4_purchases)           as ga4_purchases,
+        sum(g.ga4_revenue)             as ga4_revenue,
+
+        cast(null as bigint)           as shopify_orders,
+        cast(null as bigint)           as shopify_first_orders,
+        cast(null as bigint)           as shopify_repeat_orders,
+        cast(null as bigint)           as shopify_new_customers,
+        cast(null as double precision) as shopify_gross_sales,
+        cast(null as double precision) as shopify_total_sales,
+        cast(null as double precision) as shopify_discounts
+
+    from blended_performance__ga4 g
+    where not exists (
+        select 1 from blended_performance__paid_union p
+        where p.platform         = g.platform
+          and p.campaign_id      = g.campaign_id
+          and p.date             = g.date
+          and p.date_granularity = g.date_granularity
+    )
+    group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 ),
 
 blended_performance__site as (
@@ -424,6 +547,10 @@ select
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart,
 
+        cast(null as bigint)           as ga4_sessions,
+        cast(null as double precision) as ga4_purchases,
+        cast(null as double precision) as ga4_revenue,
+
         orders                         as shopify_orders,
         first_orders                   as shopify_first_orders,
         repeat_orders                  as shopify_repeat_orders,
@@ -438,6 +565,8 @@ select
 blended_performance as (
 select * from blended_performance__paid
 union all
+select * from blended_performance__ga4_unattached
+union all
 select * from blended_performance__site
 ),
 
@@ -445,7 +574,7 @@ wk as (
     select *
     from blended_performance
     where date_granularity = 'week'
-      and date >= date_trunc('week', current_date) - interval '13 week'
+      and date >= date_trunc('week', current_date) - interval '7 week'
       and date <  date_trunc('week', current_date)      -- exclude in-progress week
 ),
 
@@ -453,8 +582,80 @@ mo as (
     select *
     from blended_performance
     where date_granularity = 'month'
-      and date >= date_trunc('month', current_date) - interval '18 month'
+      and date >= date_trunc('month', current_date) - interval '3 month'
       and date <  date_trunc('month', current_date)
+),
+
+dtc_segment as (
+
+    select
+        'DTC Segment'                           as report_level,
+        case when grouping(segment) = 1 then 'Paid DTC Overall'
+             else segment end                   as row_label,
+        'All'                                  as market,
+        'week'                                  as grain,
+        date                                    as period_start,
+        grouping(segment)                       as is_rollup,
+        case when grouping(segment) = 1 then 'blended_*' else 'paid_*' end as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from wk
+    where business_line = 'DTC'
+      and (in_dtc_overall or channel = 'Shopify')
+    group by grouping sets ((date), (date, segment))
+    having sum(spend) > 0 or sum(shopify_orders) > 0
+
+    union all
+
+    select
+        'DTC Segment'                           as report_level,
+        case when grouping(segment) = 1 then 'Paid DTC Overall'
+             else segment end                   as row_label,
+        'All'                                  as market,
+        'month'                                  as grain,
+        date                                    as period_start,
+        grouping(segment)                       as is_rollup,
+        case when grouping(segment) = 1 then 'blended_*' else 'paid_*' end as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from mo
+    where business_line = 'DTC'
+      and (in_dtc_overall or channel = 'Shopify')
+    group by grouping sets ((date), (date, segment))
+    having sum(spend) > 0 or sum(shopify_orders) > 0
+
 ),
 
 sephora_segment as (
@@ -465,11 +666,11 @@ sephora_segment as (
                   then 'Sephora – ' || market
              when grouping(segment) = 1 then 'Sephora – Total'
              else segment end                   as row_label,
-        coalesce(market, 'All')                  as market,
+        coalesce(market, 'All')                                  as market,
         'week'                                  as grain,
         date                                    as period_start,
         grouping(segment)                       as is_rollup,
-        'cs_*'                                  as read_metrics,
+        'cs_*' as read_metrics,
         sum(spend)                              as spend,
         sum(impressions)                        as impressions,
         sum(clicks)                             as clicks,
@@ -479,6 +680,9 @@ sephora_segment as (
         sum(cs_revenue)                         as cs_revenue,
         sum(cs_offline_purchases)               as cs_offline_purchases,
         sum(cs_add_to_cart)                     as cs_add_to_cart,
+        cast(null as bigint)                    as ga4_sessions,
+        cast(null as double precision)          as ga4_purchases,
+        cast(null as double precision)          as ga4_revenue,
         cast(null as bigint)                    as site_orders,
         cast(null as bigint)                    as site_first_orders,
         cast(null as bigint)                    as site_new_customers,
@@ -486,63 +690,45 @@ sephora_segment as (
         cast(null as varchar(8))                as status,
         cast(null as varchar(256))              as detail
     from wk
-    where business_line = 'Sephora'          -- Meta AND TikTok
+    where business_line = 'Sephora'
     group by grouping sets ((date), (date, market), (date, segment))
     having sum(spend) > 0
 
-),
-
-dtc_segment as (
+    union all
 
     select
-        'DTC Segment'                           as report_level,
-        case when grouping(segment) = 1 then 'Paid DTC Overall'
+        'Sephora Segment'                       as report_level,
+        case when grouping(segment) = 1 and grouping(market) = 0
+                  then 'Sephora – ' || market
+             when grouping(segment) = 1 then 'Sephora – Total'
              else segment end                   as row_label,
-        'All'                                   as market,
-        'week'                                  as grain,
+        coalesce(market, 'All')                                  as market,
+        'month'                                  as grain,
         date                                    as period_start,
         grouping(segment)                       as is_rollup,
-        case when grouping(segment) = 1 then 'blended_*' else 'paid_*' end as read_metrics,
-        sum(spend), sum(impressions), sum(clicks),
-        sum(paid_purchases), sum(paid_revenue),
-        cast(null as double precision), cast(null as double precision),
-        cast(null as double precision), cast(null as double precision),
-        sum(shopify_orders), sum(shopify_first_orders),
-        sum(shopify_new_customers), sum(shopify_gross_sales),
-        cast(null as varchar(8)), cast(null as varchar(256))
-    from wk
-    where business_line = 'DTC'
-      and (in_dtc_overall or channel = 'Shopify')
-    group by grouping sets ((date), (date, segment))
-    having sum(spend) > 0 or sum(shopify_orders) > 0
-
-),
-
-business as (
-
-    select
-        'Business'                              as report_level,
-        case when grouping(business_line) = 1 then 'Total Paid'
-             when grouping(channel) = 1 then business_line
-             else business_line || ' – ' || channel end as row_label,
-        'All'                                   as market,
-        'month'                                 as grain,
-        date                                    as period_start,
-        grouping(channel)                       as is_rollup,
-        case when grouping(business_line) = 1                  then 'paid_*'
-             when business_line = 'Sephora'                     then 'cs_*'
-             when grouping(channel) = 1                         then 'blended_*'
-             else 'paid_*' end                  as read_metrics,
-        sum(spend), sum(impressions), sum(clicks),
-        sum(paid_purchases), sum(paid_revenue),
-        sum(cs_purchases), sum(cs_revenue),
-        sum(cs_offline_purchases), sum(cs_add_to_cart),
-        sum(shopify_orders), sum(shopify_first_orders),
-        sum(shopify_new_customers), sum(shopify_gross_sales),
-        cast(null as varchar(8)), cast(null as varchar(256))
+        'cs_*' as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        sum(cs_purchases)                       as cs_purchases,
+        sum(cs_revenue)                         as cs_revenue,
+        sum(cs_offline_purchases)               as cs_offline_purchases,
+        sum(cs_add_to_cart)                     as cs_add_to_cart,
+        cast(null as bigint)                    as ga4_sessions,
+        cast(null as double precision)          as ga4_purchases,
+        cast(null as double precision)          as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
     from mo
-    group by grouping sets ((date), (date, business_line), (date, business_line, channel))
-    having sum(spend) > 0 or sum(shopify_orders) > 0
+    where business_line = 'Sephora'
+    group by grouping sets ((date), (date, market), (date, segment))
+    having sum(spend) > 0
 
 ),
 
@@ -550,25 +736,137 @@ campaign as (
 
     select
         'Campaign'                              as report_level,
-        campaign_id || '  ·  ' || coalesce(campaign_name, '(no name)') as row_label,
-        market,
+        campaign_id || '  ·  ' || coalesce(campaign_name, '(no name)')                   as row_label,
+        market                                  as market,
         'week'                                  as grain,
         date                                    as period_start,
-        0                                       as is_rollup,
+        0                       as is_rollup,
         case when business_line = 'Sephora' then 'cs_*' else 'paid_*' end as read_metrics,
-        sum(spend), sum(impressions), sum(clicks),
-        sum(paid_purchases), sum(paid_revenue),
-        sum(cs_purchases), sum(cs_revenue),
-        sum(cs_offline_purchases), sum(cs_add_to_cart),
-        cast(null as bigint), cast(null as bigint),
-        cast(null as bigint), cast(null as double precision),
-        cast(null as varchar(8)), cast(null as varchar(256))
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        sum(cs_purchases)                       as cs_purchases,
+        sum(cs_revenue)                         as cs_revenue,
+        sum(cs_offline_purchases)               as cs_offline_purchases,
+        sum(cs_add_to_cart)                     as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
     from wk
-    where channel <> 'Shopify'
-      and date >= date_trunc('week', current_date) - interval '9 week'
+    where channel not in ('Shopify', 'GA4')
       and campaign_id is not null
     group by campaign_id, campaign_name, market, date, business_line, segment
     having sum(spend) > 0
+
+    union all
+
+    select
+        'Campaign'                              as report_level,
+        campaign_id || '  ·  ' || coalesce(campaign_name, '(no name)')                   as row_label,
+        market                                  as market,
+        'month'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        case when business_line = 'Sephora' then 'cs_*' else 'paid_*' end as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        sum(cs_purchases)                       as cs_purchases,
+        sum(cs_revenue)                         as cs_revenue,
+        sum(cs_offline_purchases)               as cs_offline_purchases,
+        sum(cs_add_to_cart)                     as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from mo
+    where channel not in ('Shopify', 'GA4')
+      and campaign_id is not null
+    group by campaign_id, campaign_name, market, date, business_line, segment
+    having sum(spend) > 0
+
+),
+
+ga4_channel as (
+
+    select
+        'GA4 Channel'                           as report_level,
+        segment                   as row_label,
+        'All'                                  as market,
+        'week'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        'ga4_*' as read_metrics,
+        cast(null as double precision)          as spend,
+        cast(null as bigint)                    as impressions,
+        cast(null as double precision)          as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from wk
+    where channel = 'GA4'
+    group by segment, date
+    having sum(ga4_sessions) > 0
+
+    union all
+
+    select
+        'GA4 Channel'                           as report_level,
+        segment                   as row_label,
+        'All'                                  as market,
+        'month'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        'ga4_*' as read_metrics,
+        cast(null as double precision)          as spend,
+        cast(null as bigint)                    as impressions,
+        cast(null as double precision)          as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from mo
+    where channel = 'GA4'
+    group by segment, date
+    having sum(ga4_sessions) > 0
 
 ),
 
@@ -576,20 +874,64 @@ site as (
 
     select
         'Site'                                  as report_level,
-        coalesce(order_type, 'All')              as row_label,
-        coalesce(market, 'All')                  as market,
+        coalesce(order_type, 'All')                   as row_label,
+        coalesce(market, 'All')                                  as market,
         'week'                                  as grain,
         date                                    as period_start,
-        grouping(order_type)                    as is_rollup,
-        'site_*'                                as read_metrics,
-        cast(null as double precision), cast(null as bigint), cast(null as double precision),
-        cast(null as double precision), cast(null as double precision),
-        cast(null as double precision), cast(null as double precision),
-        cast(null as double precision), cast(null as double precision),
-        sum(shopify_orders), sum(shopify_first_orders),
-        sum(shopify_new_customers), sum(shopify_gross_sales),
-        cast(null as varchar(8)), cast(null as varchar(256))
+        grouping(order_type)                       as is_rollup,
+        'site_*' as read_metrics,
+        cast(null as double precision)          as spend,
+        cast(null as bigint)                    as impressions,
+        cast(null as double precision)          as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        cast(null as bigint)                    as ga4_sessions,
+        cast(null as double precision)          as ga4_purchases,
+        cast(null as double precision)          as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
     from wk
+    where channel = 'Shopify'
+    group by grouping sets ((date), (date, order_type), (date, market))
+    having sum(shopify_orders) > 0
+
+    union all
+
+    select
+        'Site'                                  as report_level,
+        coalesce(order_type, 'All')                   as row_label,
+        coalesce(market, 'All')                                  as market,
+        'month'                                  as grain,
+        date                                    as period_start,
+        grouping(order_type)                       as is_rollup,
+        'site_*' as read_metrics,
+        cast(null as double precision)          as spend,
+        cast(null as bigint)                    as impressions,
+        cast(null as double precision)          as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        cast(null as bigint)                    as ga4_sessions,
+        cast(null as double precision)          as ga4_purchases,
+        cast(null as double precision)          as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from mo
     where channel = 'Shopify'
     group by grouping sets ((date), (date, order_type), (date, market))
     having sum(shopify_orders) > 0
@@ -618,7 +960,7 @@ health_catalog as (
         case when sum(case when coalesce(cs_purchases,0) = 0 then spend else 0 end)
                 / nullif(sum(spend),0) > 0.20 then 'FAIL' else 'OK' end as status
     from blended_performance
-    where date_granularity = 'day' and business_line = 'Sephora' and channel = 'Meta'
+    where date_granularity = 'day' and business_line = 'Sephora'
       and date >= dateadd(day, -30, current_date)
     group by 1
 ),
@@ -635,8 +977,7 @@ health_mapping as (
         case when sum(case when segment = 'Unmapped' then spend else 0 end) > 500
              then 'FAIL' else 'OK' end          as status
     from blended_performance
-    where date_granularity = 'day'
-      and channel <> 'Shopify'
+    where date_granularity = 'day' and channel not in ('Shopify', 'GA4')
       and date >= dateadd(day, -7, current_date)
 
     union all
@@ -648,8 +989,22 @@ health_mapping as (
         case when sum(case when campaign_id is null then spend else 0 end) > 0
              then 'FAIL' else 'OK' end
     from blended_performance
-    where date_granularity = 'day'
-      and channel <> 'Shopify'
+    where date_granularity = 'day' and channel not in ('Shopify', 'GA4')
+      and date >= dateadd(day, -7, current_date)
+),
+
+health_ga4 as (
+
+    select
+        'GA4 unattributed share (7d)'           as subject,
+        'ga4'                                   as check_name,
+        round(100.0 * sum(case when segment = 'Unattributed Paid' then ga4_revenue else 0 end)
+                    / nullif(sum(ga4_revenue), 0), 1)::varchar || '% of paid-source GA4 revenue'
+                                                as detail,
+        case when sum(case when segment = 'Unattributed Paid' then ga4_revenue else 0 end)
+                / nullif(sum(ga4_revenue), 0) > 0.15 then 'FAIL' else 'OK' end as status
+    from blended_performance
+    where date_granularity = 'day' and channel = 'GA4'
       and date >= dateadd(day, -7, current_date)
 ),
 
@@ -664,40 +1019,52 @@ health_zero as (
               and sum(coalesce(paid_purchases,0)) + sum(coalesce(cs_purchases,0)) = 0
              then 'FAIL' else 'OK' end           as status
     from blended_performance
-    where date_granularity = 'day' and channel <> 'Shopify'
+    where date_granularity = 'day' and channel not in ('Shopify', 'GA4')
       and date >= dateadd(day, -30, current_date)
     group by 1
 ),
 
 health as (
     select
-        'Health'                    as report_level,
-        check_name || ': ' || subject as row_label,
-        'All'                       as market,
-        'n/a'                       as grain,
-        current_date                as period_start,
-        0                           as is_rollup,
-        'status'                    as read_metrics,
-        cast(null as double precision), cast(null as bigint), cast(null as double precision),
-        cast(null as double precision), cast(null as double precision),
-        cast(null as double precision), cast(null as double precision),
-        cast(null as double precision), cast(null as double precision),
-        cast(null as bigint), cast(null as bigint),
-        cast(null as bigint), cast(null as double precision),
-        status, detail
+        'Health'                                as report_level,
+        check_name || ': ' || subject           as row_label,
+        'All'                                   as market,
+        'n/a'                                   as grain,
+        current_date                            as period_start,
+        0                                       as is_rollup,
+        'status'                                as read_metrics,
+        cast(null as double precision)          as spend,
+        cast(null as bigint)                    as impressions,
+        cast(null as double precision)          as clicks,
+        cast(null as double precision)          as paid_purchases,
+        cast(null as double precision)          as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        cast(null as bigint)                    as ga4_sessions,
+        cast(null as double precision)          as ga4_purchases,
+        cast(null as double precision)          as ga4_revenue,
+        cast(null as bigint)                    as site_orders,
+        cast(null as bigint)                    as site_first_orders,
+        cast(null as bigint)                    as site_new_customers,
+        cast(null as double precision)          as site_gross_sales,
+        status,
+        detail
     from (
         select * from health_freshness
         union all select * from health_catalog
         union all select * from health_mapping
+        union all select * from health_ga4
         union all select * from health_zero
     ) h
 ),
 
 unioned as (
-    select * from sephora_segment
-    union all select * from dtc_segment
-    union all select * from business
+    select * from dtc_segment
+    union all select * from sephora_segment
     union all select * from campaign
+    union all select * from ga4_channel
     union all select * from site
     union all select * from health
 )
@@ -726,52 +1093,62 @@ select
     case when clicks      > 0 then round(spend / clicks, 2) end                 as cpc,
 
     round(paid_purchases, 0)                                    as paid_purchases,
-    round(paid_revenue, 2)                                      as paid_revenue,
-    case when spend          > 0 then round(paid_revenue / spend, 2) end   as paid_roas,
-    case when paid_purchases > 0 then round(spend / paid_purchases, 2) end as paid_cpa,
+    round(paid_revenue, 2)                                       as paid_revenue,
+    case when spend          > 0 then round(paid_revenue / spend, 2) end        as paid_roas,
+    case when paid_purchases > 0 then round(spend / paid_purchases, 2) end      as paid_cpa,
+    case when clicks         > 0 then round(paid_purchases::numeric / clicks, 4) end as paid_cvr,
+    case when paid_purchases > 0 then round(paid_revenue / paid_purchases, 2) end as paid_aov,
 
-    round(cs_purchases, 0)                                      as cs_purchases,
-    round(cs_revenue, 2)                                        as cs_revenue,
-    case when spend        > 0 then round(cs_revenue / spend, 2) end        as cs_roas,
-    case when cs_purchases > 0 then round(spend / cs_purchases, 2) end      as cs_cpa,
-    case when cs_purchases > 0 then round(cs_revenue / cs_purchases, 2) end as cs_aov,
-    round(cs_add_to_cart, 0)                                    as cs_add_to_cart,
-    round(cs_offline_purchases, 0)                              as cs_instore_purchases,
+    ga4_sessions,
+    round(ga4_purchases, 0)                                      as ga4_purchases,
+    round(ga4_revenue, 2)                                        as ga4_revenue,
+    case when spend         > 0 then round(ga4_revenue / spend, 2) end          as ga4_roas,
+    case when ga4_purchases > 0 then round(spend / ga4_purchases, 2) end        as ga4_cpa,
+    case when ga4_purchases > 0 then round(ga4_revenue / ga4_purchases, 2) end  as ga4_aov,
+    case when ga4_sessions  > 0 then round(ga4_purchases::numeric / ga4_sessions, 4) end as ga4_cvr,
+
+    round(cs_purchases, 0)                                       as cs_purchases,
+    round(cs_revenue, 2)                                         as cs_revenue,
+    case when spend        > 0 then round(cs_revenue / spend, 2) end            as cs_roas,
+    case when cs_purchases > 0 then round(spend / cs_purchases, 2) end          as cs_cpa,
+    case when cs_purchases > 0 then round(cs_revenue / cs_purchases, 2) end     as cs_aov,
+    case when clicks       > 0 then round(cs_purchases::numeric / clicks, 4) end as cs_cvr,
+    round(cs_add_to_cart, 0)                                     as cs_add_to_cart,
+    round(cs_offline_purchases, 0)                               as cs_instore_purchases,
     case when cs_purchases > 0
-         then round(cs_offline_purchases::numeric / cs_purchases, 4) end    as pct_instore,
+         then round(cs_offline_purchases::numeric / cs_purchases, 4) end        as pct_instore,
 
     site_orders,
     site_first_orders,
     site_new_customers,
-    round(site_gross_sales, 2)                                  as site_gross_sales,
+    round(site_gross_sales, 2)                                   as site_gross_sales,
     case when site_orders > 0 then round(site_gross_sales / site_orders, 2) end            as aov,
     case when site_orders > 0 then round(site_first_orders::numeric / site_orders, 4) end  as pct_new,
 
     case when is_rollup = 1 and spend > 0 and site_gross_sales > 0
-         then round(site_gross_sales / spend, 2) end             as blended_roas,
+         then round(site_gross_sales / spend, 2) end              as blended_roas,
     case when is_rollup = 1 and spend > 0 and site_new_customers > 0
-         then round(spend / site_new_customers, 2) end           as blended_cac,
+         then round(spend / site_new_customers, 2) end            as blended_cac,
 
     case
-        when report_level = 'Health'            then true
-        when report_level = 'Sephora Segment'   then period_start >= '2025-03-01'
-        when report_level = 'Business'
-             and row_label like 'Sephora%'      then period_start >= '2025-03-01'
-        when grain = 'month'                     then period_start >= '2026-08-01'
+        when report_level = 'Health'          then true
+        when report_level = 'Sephora Segment' then period_start >= '2025-03-01'
+        when report_level = 'GA4 Channel'     then period_start >= '2024-08-17'
+        when grain = 'month'                   then period_start >= '2026-08-01'
         else period_start >= '2026-07-27'
-    end                                                         as data_valid,
+    end                                                          as data_valid,
 
     case when read_metrics = 'cs_*'
          then coalesce(cs_purchases, 0) > 0 or coalesce(cs_add_to_cart, 0) > 0
-    end                                                         as has_catalog_feedback,
+    end                                                          as has_catalog_feedback,
 
     status,
     detail
 
 from unioned
 order by
-    case report_level when 'Health' then 0 when 'Business' then 1
-         when 'Sephora Segment' then 2 when 'DTC Segment' then 3
+    case report_level when 'Health' then 0 when 'DTC Segment' then 1
+         when 'Sephora Segment' then 2 when 'GA4 Channel' then 3
          when 'Site' then 4 else 5 end,
     period_start desc,
     is_rollup desc,

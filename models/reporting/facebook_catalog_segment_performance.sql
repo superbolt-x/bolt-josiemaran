@@ -143,13 +143,7 @@ spined as (
 
     select
         g.date_granularity,
-        case g.date_granularity
-            when 'day'     then p.date
-            when 'week'    then date_trunc('week',    p.date)::date
-            when 'month'   then date_trunc('month',   p.date)::date
-            when 'quarter' then date_trunc('quarter', p.date)::date
-            when 'year'    then date_trunc('year',    p.date)::date
-        end as date,
+        {{ jm_period_start('p.date', 'g.date_granularity') }} as date,
         p.campaign_id,
         p.cs_purchases, p.cs_revenue,
         p.cs_purchases_7d_click, p.cs_purchases_1d_view,
