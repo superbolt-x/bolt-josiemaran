@@ -115,8 +115,13 @@ var SHAPES = {
       ['CTR',    'ctr',    '0.00%'],
       ['Clicks', 'clicks', '#,##0'],
       ['CPC',    'cpc',    '$0.00']
-    ],
-    flag: FEEDBACK, flagStyle: 'amber'
+    ]
+    // No flag. has_catalog_feedback is FALSE for every Traffic row, always —
+    // these campaigns structurally never carry catalog-segment tracking, so
+    // that isn't an anomaly to act on, it's the permanent baseline. Flagging
+    // it painted the whole table amber forever, which said nothing. Collab
+    // keeps the flag: it DOES normally get feedback, so its absence there is
+    // a real signal.
   },
   sephoraCollab: {
     // WoW detail table, matching slides 10/12 exactly — Clicks, Purchases,
@@ -461,11 +466,16 @@ function buildTab_(ss, name, cfg) {
     row += 2;
   });
 
-  sh.getRange(row, 1).setValue(
-    lastShape.flagStyle === 'amber'
-      ? 'Amber = real Sephora spend with conversions unreported (no catalog-segment feedback). Act on it; do not fill it in.'
-      : 'Grey = the underlying data does not exist for that period. Ignore; do not backfill.')
-    .setFontColor(C.note).setFontSize(9);
+  // Only caption a legend if the last slide's shape actually carries a flag —
+  // sephoraTraffic has none, so a tab entirely made of Traffic slides (like
+  // Sephora Traffic WoW) gets no caption rather than a stale amber/grey one.
+  if (lastShape.flag) {
+    sh.getRange(row, 1).setValue(
+      lastShape.flagStyle === 'amber'
+        ? 'Amber = real Sephora spend with conversions unreported (no catalog-segment feedback). Act on it; do not fill it in.'
+        : 'Grey = the underlying data does not exist for that period. Ignore; do not backfill.')
+      .setFontColor(C.note).setFontSize(9);
+  }
 
   sh.setColumnWidth(1, isMtd ? 130 : 150);
   for (var c = 2; c <= 9; c++) sh.setColumnWidth(c, isMtd ? 95 : 105);
@@ -515,8 +525,8 @@ function insertPendingCharts_() {
       .setNumHeaders(1)
       .setOption('title', label + ' — ' + bar[0] + ' vs ' + line[0])
       .setOption('series', {
-        0: { type: 'bars', targetAxisIndex: 0, color: C.bar },
-        1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6 }
+        0: { type: 'bars', targetAxisIndex: 0, color: C.bar, dataLabel: 'value' },
+        1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6, dataLabel: 'value' }
       })
       .setOption('vAxes', { 0: { title: bar[0] }, 1: { title: line[0] } })
       .setOption('hAxis', { title: g.col })
