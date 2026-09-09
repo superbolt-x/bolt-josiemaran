@@ -84,10 +84,16 @@ var SHAPES = {
       ['AOV',        'paid_aov',       '$#,##0.00']
     ],
     chart: [['Spend', 'spend', '$#,##0'], ['ROAS', 'paid_roas', '0.00']],
-    // The MTD tab's flat summary row — deck order: Spend, CTR, CVR, Revenue,
-    // ROAS, AOV. Keys, not [label, format] triples — metricByKey_ looks the
-    // rest up in `metrics` above so the two can never disagree on a format.
-    summary: ['spend', 'ctr', 'paid_cvr', 'paid_revenue', 'paid_roas', 'paid_aov'],
+    // The MTD tab's flat summary row, per slide 3: Spend, CTR, CVR, Revenue,
+    // ROAS, AOV.
+    summary: [
+      ['Spend',   'spend',        '$#,##0'],
+      ['CTR',     'ctr',          '0.00%'],
+      ['CVR',     'paid_cvr',     '0.00%'],
+      ['Revenue', 'paid_revenue', '$#,##0'],
+      ['ROAS',    'paid_roas',    '0.00'],
+      ['AOV',     'paid_aov',     '$#,##0.00']
+    ],
     flag: VALID, flagStyle: 'grey'
   },
   sephoraTraffic: {
@@ -101,24 +107,43 @@ var SHAPES = {
       ['CPC',    'cpc',    '$0.00']
     ],
     chart: [['Spend', 'spend', '$#,##0'], ['CPC', 'cpc', '$0.00']],
+    // MTD summary is identical to the WoW detail table here — this shape only
+    // ever had 5 metrics.
+    summary: [
+      ['Spend',  'spend',  '$#,##0'],
+      ['CPM',    'cpm',    '$0.00'],
+      ['CTR',    'ctr',    '0.00%'],
+      ['Clicks', 'clicks', '#,##0'],
+      ['CPC',    'cpc',    '$0.00']
+    ],
     flag: FEEDBACK, flagStyle: 'amber'
   },
   sephoraCollab: {
+    // WoW detail table, matching slides 10/12 exactly — Clicks, Purchases,
+    // Revenue and % in store are in the card but not shown on this table.
     metrics: [
-      ['Spend',     'spend',        '$#,##0'],
-      ['CPM',       'cpm',          '$0.00'],
-      ['CTR',       'ctr',          '0.00%'],
-      ['CPC',       'cpc',          '$0.00'],
-      ['CVR',       'cs_cvr',       '0.00%'],
-      ['Purchases', 'cs_purchases', '#,##0'],
-      ['CPA',       'cs_cpa',       '$#,##0.00'],
-      ['Revenue',   'cs_revenue',   '$#,##0'],
-      ['ROAS',      'cs_roas',      '0.00'],
-      ['AOV',       'cs_aov',       '$#,##0.00'],
-      ['% in store','pct_instore',  '0.0%']
+      ['Spend', 'spend',   '$#,##0'],
+      ['CPM',   'cpm',     '$0.00'],
+      ['CTR',   'ctr',     '0.00%'],
+      ['CPC',   'cpc',     '$0.00'],
+      ['CVR',   'cs_cvr',  '0.00%'],
+      ['CPA',   'cs_cpa',  '$#,##0.00'],
+      ['ROAS',  'cs_roas', '0.00'],
+      ['AOV',   'cs_aov',  '$#,##0.00']
     ],
     chart: [['Spend', 'spend', '$#,##0'], ['ROAS', 'cs_roas', '0.00']],
-    summary: ['spend', 'ctr', 'cs_cvr', 'cs_revenue', 'cs_roas', 'cs_aov'],
+    // MTD summary row for Collab is DELIVERY ONLY, same 5 metrics as Traffic
+    // (slides 10/12), not the conversion metrics above — catalog-segment
+    // feedback lags, so the most recent days rarely have it in yet. Triples,
+    // not keys: 'clicks' isn't in this shape's own `metrics` above, since the
+    // WoW table doesn't show it.
+    summary: [
+      ['Spend',  'spend',  '$#,##0'],
+      ['CPM',    'cpm',    '$0.00'],
+      ['CTR',    'ctr',    '0.00%'],
+      ['Clicks', 'clicks', '#,##0'],
+      ['CPC',    'cpc',    '$0.00']
+    ],
     flag: FEEDBACK, flagStyle: 'amber'
   },
   site: {
@@ -180,10 +205,17 @@ var TABS = {
     ['Meta Overall',     'DTC Segment', 'All'],
     ['Google Overall',   'DTC Segment', 'All']
   ]},
-  'MTD Sephora': { shape: 'sephoraCollab', grain: 'mtd', chartGrain: 'week', slides: [
-    ['Sephora – Total',   'Sephora Segment', 'All'],
-    ['Sephora US Collab', 'Sephora Segment', 'All'],
-    ['Sephora CA Collab', 'Sephora Segment', 'All']
+  // The 5 real Sephora segments the deck carries an MTD slide for — no
+  // aggregate "Total" row, that was mine, not the client's. Two shapes mixed
+  // in one tab (Traffic charts Spend/CPC, Collab charts Spend/ROAS), so each
+  // slide names its own shape as a 4th element instead of the tab-level
+  // default every other tab uses.
+  'MTD Sephora': { grain: 'mtd', chartGrain: 'week', slides: [
+    ['Sephora US Traffic', 'Sephora Segment', 'All', 'sephoraTraffic'],
+    ['Sephora CA Traffic', 'Sephora Segment', 'All', 'sephoraTraffic'],
+    ['Sephora @ Kohls',    'Sephora Segment', 'All', 'sephoraTraffic'],
+    ['Sephora US Collab',  'Sephora Segment', 'All', 'sephoraCollab'],
+    ['Sephora CA Collab',  'Sephora Segment', 'All', 'sephoraCollab']
   ]}
 };
 
@@ -198,6 +230,7 @@ function buildReport() {
   Object.keys(TABS).forEach(function (n) { buildTab_(ss, n, TABS[n]); });
   buildCampaigns_(ss);
   buildHealth_(ss);
+  insertPendingCharts_();
   orderTabs_(ss);
   ss.toast('Rebuilt. Feed tab expected: "' + FEED + '"', 'Done', 8);
 }
@@ -255,14 +288,6 @@ function cell_(level, row, market, cellRef, grain, metric) {
          ' MATCH("' + metric + '", ' + FEED_REF + '!$1:$1, 0)), "")';
 }
 
-/** Find [label, metric, format] in shape.metrics by metric key. */
-function metricByKey_(shape, key) {
-  for (var i = 0; i < shape.metrics.length; i++) {
-    if (shape.metrics[i][1] === key) return shape.metrics[i];
-  }
-  throw new Error('metric "' + key + '" not in this shape\'s metrics list');
-}
-
 /**
  * The MTD block: one row, current month-to-date only — matching the deck's
  * "Full Funnel KPIs" slide, which shows MTD as a single flat row of numbers,
@@ -270,10 +295,10 @@ function metricByKey_(shape, key) {
  */
 function buildMtdSummaryBlock_(sh, shape, level, label, market, row) {
   var g = GRAIN.mtd;
-  var cols = shape.summary.map(function (key) { return metricByKey_(shape, key); });
+  var cols = shape.summary;
 
   var hdr = row;
-  sh.getRange(row, 1).setValue('MTD').setFontWeight('bold');
+  sh.getRange(row, 1).setFormula('=TEXT(TODAY(),"mmm")&" MTD"').setFontWeight('bold');
   cols.forEach(function (m, i) { sh.getRange(row, 2 + i).setValue(m[0]).setFontWeight('bold'); });
   sh.getRange(row, 1, 1, 1 + cols.length)
     .setFontWeight('bold').setBackground(C.block)
@@ -364,13 +389,11 @@ function buildComparisonBlock_(sh, shape, level, label, market, grain, g, row) {
 }
 
 function buildTab_(ss, name, cfg) {
-  var shape = SHAPES[cfg.shape];
   var g     = GRAIN[cfg.grain];
   var cg    = cfg.chartGrain || cfg.grain;
   var gc    = GRAIN[cg];
   var sh    = sheet_(ss, name, true);
   var isMtd = cfg.grain === 'mtd';
-  var titleW = isMtd ? 1 + shape.summary.length : 2 + KPI_PERIODS;
 
   sh.getRange(1, 1).setValue(name).setFontSize(14).setFontWeight('bold').setFontColor(C.headerT);
   sh.getRange(1, 1, 1, 5).setBackground(C.header);
@@ -391,9 +414,12 @@ function buildTab_(ss, name, cfg) {
     .setFontColor(C.amberT);
   sh.getRange('A2:A3').setFontColor(C.note);
 
-  var row = 5;
+  var row = 5, lastShape = null;
   cfg.slides.forEach(function (sl) {
     var label = sl[0], level = sl[1], market = sl[2];
+    var shape = SHAPES[sl[3] || cfg.shape];
+    lastShape = shape;
+    var titleW = isMtd ? 1 + shape.summary.length : 2 + KPI_PERIODS;
     var blockTop = row;
 
     // ── slide title ────────────────────────────────────────────────────────
@@ -425,17 +451,18 @@ function buildTab_(ss, name, cfg) {
     }
     sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length)
       .setBorder(true, true, true, true, true, true, C.rule, SpreadsheetApp.BorderStyle.SOLID);
-    // Apps Script builds the chart from the ranges' CURRENT values. Without
-    // this, a chart built in the same run that wrote its own data can render
-    // as an empty box — the formulas above hadn't finished recalculating yet
-    // when the chart snapshot was taken.
-    SpreadsheetApp.flush();
-    addChart_(sh, shape, label, gc, chdr, blockTop);
+    // Charts are not built here. Apps Script builds an embedded chart from
+    // the CURRENT values in its source range — building one mid-run, right
+    // after writing its own data, risks racing the recalculation of every
+    // other formula still pending across a big multi-tab workbook. Queue the
+    // spec instead; insertPendingCharts_() builds all of them in one pass
+    // after the whole report is written and flushed.
+    queueChart_(sh, shape, label, gc, chdr, blockTop);
     row += 2;
   });
 
   sh.getRange(row, 1).setValue(
-    shape.flagStyle === 'amber'
+    lastShape.flagStyle === 'amber'
       ? 'Amber = real Sephora spend with conversions unreported (no catalog-segment feedback). Act on it; do not fill it in.'
       : 'Grey = the underlying data does not exist for that period. Ignore; do not backfill.')
     .setFontColor(C.note).setFontSize(9);
@@ -447,38 +474,58 @@ function buildTab_(ss, name, cfg) {
 }
 
 /**
+ * Queue a chart spec instead of building it immediately — see the comment at
+ * the call site in buildTab_. All charts are actually built by
+ * insertPendingCharts_(), once, at the very end of buildReport().
+ */
+var PENDING_CHARTS_ = [];
+
+function queueChart_(sh, shape, label, g, chdr, anchorRow) {
+  PENDING_CHARTS_.push({ sh: sh, shape: shape, label: label, g: g, chdr: chdr, anchorRow: anchorRow });
+}
+
+/**
  * The deck's "Spend vs ROAS" chart, for real: first chart metric as columns on
  * the left axis, second as a line on the right. Two axes because spend is in
  * thousands and ROAS is around 1 — on one axis the line would sit flat on zero.
  *
- * Anchored beside its own block (column F) so each chart travels with the table
- * it belongs to. Charts are removed and rebuilt on every run.
+ * Anchored beside its own block (column F) so each chart travels with the block
+ * it belongs to. Charts are removed at the top of each tab rebuild (sheet_)
+ * and all rebuilt here, after every tab's data has been written and flushed —
+ * a chart built mid-run, right after writing its own data, can snapshot
+ * before Sheets finishes recalculating and render as an empty box.
  */
-function addChart_(sh, shape, label, g, chdr, anchorRow) {
-  var bar = shape.chart[0], line = shape.chart[1];
-  var chart = sh.newChart().asComboChart()
-    .addRange(sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length))
-    .setOption('title', label + ' — ' + bar[0] + ' vs ' + line[0])
-    .setOption('titleTextStyle', { color: C.header, fontSize: 12, bold: true })
-    .setOption('seriesType', 'bars')
-    .setOption('series', {
-      0: { type: 'bars', targetAxisIndex: 0, color: C.bar },
-      1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6 }
-    })
-    .setOption('vAxes', {
-      0: { title: bar[0],  format: bar[2].indexOf('$') === 0 ? 'currency' : 'short' },
-      1: { title: line[0], format: line[2].indexOf('$') === 0 ? 'currency' : 'short',
-           gridlines: { count: 0 } }
-    })
-    .setOption('hAxis', { title: g.col, format: g.hfmt, slantedText: false })
-    .setOption('legend', { position: 'bottom' })
-    .setOption('backgroundColor', '#ffffff')
-    .setOption('chartArea', { left: 60, top: 40, width: '76%', height: '62%' })
-    .setOption('width', 460)
-    .setOption('height', 260)
-    .setPosition(anchorRow, 6, 0, 0)
-    .build();
-  sh.insertChart(chart);
+function insertPendingCharts_() {
+  SpreadsheetApp.flush();
+  PENDING_CHARTS_.forEach(function (spec) {
+    var sh = spec.sh, shape = spec.shape, label = spec.label, g = spec.g,
+        chdr = spec.chdr, anchorRow = spec.anchorRow;
+    var bar = shape.chart[0], line = shape.chart[1];
+    var chart = sh.newChart().asComboChart()
+      .addRange(sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length))
+      .setOption('title', label + ' — ' + bar[0] + ' vs ' + line[0])
+      .setOption('titleTextStyle', { color: C.header, fontSize: 12, bold: true })
+      .setOption('seriesType', 'bars')
+      .setOption('series', {
+        0: { type: 'bars', targetAxisIndex: 0, color: C.bar },
+        1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6 }
+      })
+      .setOption('vAxes', {
+        0: { title: bar[0],  format: bar[2].indexOf('$') === 0 ? 'currency' : 'short' },
+        1: { title: line[0], format: line[2].indexOf('$') === 0 ? 'currency' : 'short',
+             gridlines: { count: 0 } }
+      })
+      .setOption('hAxis', { title: g.col, format: g.hfmt, slantedText: false })
+      .setOption('legend', { position: 'bottom' })
+      .setOption('backgroundColor', '#ffffff')
+      .setOption('chartArea', { left: 60, top: 40, width: '76%', height: '62%' })
+      .setOption('width', 460)
+      .setOption('height', 260)
+      .setPosition(anchorRow, 6, 0, 0)
+      .build();
+    sh.insertChart(chart);
+  });
+  PENDING_CHARTS_ = [];
 }
 
 /**
