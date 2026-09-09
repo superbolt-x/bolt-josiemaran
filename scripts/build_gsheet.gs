@@ -398,7 +398,7 @@ function addChart_(sh, shape, label, g, chdr, anchorRow) {
     .setOption('hAxis', { title: g.col, format: g.hfmt, slantedText: false })
     .setOption('legend', { position: 'bottom' })
     .setOption('backgroundColor', '#ffffff')
-    .setOption('chartArea', { left: 60, right: 60, top: 40, width: '76%', height: '62%' })
+    .setOption('chartArea', { left: 60, top: 40, width: '76%', height: '62%' })
     .setOption('width', 460)
     .setOption('height', 260)
     .setPosition(anchorRow, 6, 0, 0)
