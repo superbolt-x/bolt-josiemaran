@@ -501,24 +501,26 @@ function insertPendingCharts_() {
     var sh = spec.sh, shape = spec.shape, label = spec.label, g = spec.g,
         chdr = spec.chdr, anchorRow = spec.anchorRow;
     var bar = shape.chart[0], line = shape.chart[1];
+    // Stripped down after two rounds of "renders a titled but empty box" with
+    // no thrown error (an actually-unsupported option DOES throw — that's how
+    // chartArea.right got caught earlier — so a silent failure here points at
+    // something nested being malformed, not rejected outright). This keeps
+    // only the options load-bearing for a dual-axis bar+line combo: the
+    // range, explicit header count, per-series type/axis/color, bare vAxis
+    // titles, and position. If this still renders empty, the fault is
+    // somewhere more fundamental than chart options and is worth a second
+    // pair of eyes rather than another guess.
     var chart = sh.newChart().asComboChart()
       .addRange(sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length))
+      .setNumHeaders(1)
       .setOption('title', label + ' — ' + bar[0] + ' vs ' + line[0])
-      .setOption('titleTextStyle', { color: C.header, fontSize: 12, bold: true })
-      .setOption('seriesType', 'bars')
       .setOption('series', {
         0: { type: 'bars', targetAxisIndex: 0, color: C.bar },
         1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6 }
       })
-      .setOption('vAxes', {
-        0: { title: bar[0],  format: bar[2].indexOf('$') === 0 ? 'currency' : 'short' },
-        1: { title: line[0], format: line[2].indexOf('$') === 0 ? 'currency' : 'short',
-             gridlines: { count: 0 } }
-      })
-      .setOption('hAxis', { title: g.col, format: g.hfmt, slantedText: false })
+      .setOption('vAxes', { 0: { title: bar[0] }, 1: { title: line[0] } })
+      .setOption('hAxis', { title: g.col })
       .setOption('legend', { position: 'bottom' })
-      .setOption('backgroundColor', '#ffffff')
-      .setOption('chartArea', { left: 60, top: 40, width: '76%', height: '62%' })
       .setOption('width', 460)
       .setOption('height', 260)
       .setPosition(anchorRow, 6, 0, 0)
