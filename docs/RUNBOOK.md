@@ -182,3 +182,46 @@ row in the feed, and the Apps Script `CONFIG` decides whether to display it.
 - `bingads_*`, `pinterest_*` and `googleads_ad_performance` are
   `enabled = false` — not live, no table in the warehouse. Delete them if
   they're definitively not coming.
+
+## Running dbt locally on the server
+
+dbt is installed in an isolated venv at `/home/ubuntu/.dbt-venv` (dbt-core
+1.12.4, dbt-redshift 1.11.1). It does not touch the existing
+`dataengineering/venv` or `.venv`.
+
+**Why local rather than triggering Fivetran:** Fivetran syncs the repo from
+GitHub on its own cadence, so a transformation fired immediately after a push
+runs against the PREVIOUS commit. Running dbt here uses the working tree as it
+is, which removes that race entirely.
+
+The 14 private `superbolt-x` packages are declared in `packages.yml` with
+HTTPS URLs. There is no HTTPS credential on this box, but there is an SSH key,
+so rewrite the URLs for the command rather than editing `packages.yml`:
+
+```bash
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0=url.git@github.com:.insteadOf \
+GIT_CONFIG_VALUE_0=https://github.com/ \
+/home/ubuntu/.dbt-venv/bin/dbt deps
+```
+
+**Still required:** a `profiles.yml` for profile `bolt_blueprint` with Redshift
+host/user/password/port/dbname. The convention used elsewhere in
+`dataengineering/` is a `.keys/redshift-credentials.json` holding
+`{"host","user","password"}`, but that file is not present on this box. Until
+it is, `dbt parse` and `dbt deps` work; `dbt run`, `dbt seed` and `dbt test`
+cannot connect.
+
+Once credentials exist, the loop for a segment change is:
+
+```bash
+/home/ubuntu/.dbt-venv/bin/dbt seed  --select campaign_segments
+/home/ubuntu/.dbt-venv/bin/dbt run   --select +blended_performance
+/home/ubuntu/.dbt-venv/bin/dbt test  --select blended_performance
+```
+
+`dbt parse` is worth running on every change even without credentials — it
+compiles every model and macro and validates all schema tests. It caught two
+`accepted_values` lists that were stale after GA4 rows were added (`channel`
+missing 'GA4', `segment` missing 'Unattributed Paid' and 'Other'), which no
+amount of SQL-only linting would have found.

@@ -10,11 +10,15 @@ models:
       orders and revenue. Never SUM across date_granularity values.
     columns:
       - name: channel
-        description: "Meta | Google | TikTok | Shopify"
+        description: >
+          Meta | Google | TikTok | Shopify | GA4. 'GA4' is not an ad platform —
+          it is the channel stamped on GA4 sessions/revenue that attach to no
+          paid campaign, so total GA4 revenue reconciles to the raw table
+          instead of silently disappearing.
         tests:
           - not_null
           - accepted_values:
-              values: ['Meta', 'Google', 'TikTok', 'Shopify']
+              values: ['Meta', 'Google', 'TikTok', 'Shopify', 'GA4']
 
       - name: campaign_id
         description: >
@@ -38,14 +42,20 @@ models:
         description: >
           Assigned by CAMPAIGN ID from seeds/campaign_segments.csv, taken from
           the reporting deck — not parsed from campaign names. Seven segments
-          plus 'Unmapped' and 'Site'. Traffic and Collab must never be summed.
+          plus 'Unmapped', 'Site', and the two GA4 residuals below. Traffic and
+          Collab must never be summed.
         tests:
           - not_null
           - accepted_values:
+              # 'Unattributed Paid' and 'Other' are the GA4 residual segments —
+              # paid-looking sessions whose campaign never resolved, and
+              # everything non-paid (email, SMS, organic, direct, affiliate).
+              # They exist so GA4 totals reconcile; they are never in a rollup.
               values: ['Google Overall', 'Meta Overall', 'Sephora US Traffic',
                        'Sephora US Collab', 'Sephora CA Traffic',
                        'Sephora CA Collab', 'Sephora @ Kohls',
-                       'Unmapped', 'Site']
+                       'Unmapped', 'Site',
+                       'Unattributed Paid', 'Other']
 
       - name: in_dtc_overall
         description: >
