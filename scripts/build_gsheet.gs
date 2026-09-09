@@ -235,7 +235,7 @@ function buildReport() {
   Object.keys(TABS).forEach(function (n) { buildTab_(ss, n, TABS[n]); });
   buildCampaigns_(ss);
   buildHealth_(ss);
-  insertPendingCharts_();
+  upsertPendingCharts_();
   orderTabs_(ss);
   ss.toast('Rebuilt. Feed tab expected: "' + FEED + '"', 'Done', 8);
 }
@@ -246,9 +246,13 @@ function sheet_(ss, name, wipe) {
   else if (wipe) {
     sh.clear();
     sh.clearConditionalFormatRules();
-    // clear() leaves embedded charts behind, so a rebuild would stack a fresh
-    // set on top of the old ones.
-    sh.getCharts().forEach(function (ch) { sh.removeChart(ch); });
+    // Charts are deliberately NOT removed here. clear() doesn't touch them,
+    // and destroying them would be the one thing that makes linking this
+    // book into Google Slides impossible: a Slides-linked chart references
+    // the embedded chart's object ID, so remove-then-reinsert hands it a new
+    // ID every run and orphans the slide. upsertPendingCharts_() edits the
+    // existing chart in place instead, preserving identity, and prunes only
+    // the charts this run no longer produces.
   }
   return sh;
 }
@@ -460,7 +464,7 @@ function buildTab_(ss, name, cfg) {
     // the CURRENT values in its source range — building one mid-run, right
     // after writing its own data, risks racing the recalculation of every
     // other formula still pending across a big multi-tab workbook. Queue the
-    // spec instead; insertPendingCharts_() builds all of them in one pass
+    // spec instead; upsertPendingCharts_() builds all of them in one pass
     // after the whole report is written and flushed.
     queueChart_(sh, shape, label, gc, chdr, blockTop);
     row += 2;
@@ -486,7 +490,7 @@ function buildTab_(ss, name, cfg) {
 /**
  * Queue a chart spec instead of building it immediately — see the comment at
  * the call site in buildTab_. All charts are actually built by
- * insertPendingCharts_(), once, at the very end of buildReport().
+ * upsertPendingCharts_(), once, at the very end of buildReport().
  */
 var PENDING_CHARTS_ = [];
 
@@ -505,39 +509,72 @@ function queueChart_(sh, shape, label, g, chdr, anchorRow) {
  * a chart built mid-run, right after writing its own data, can snapshot
  * before Sheets finishes recalculating and render as an empty box.
  */
-function insertPendingCharts_() {
+function upsertPendingCharts_() {
   SpreadsheetApp.flush();
+
+  // Group this run's specs by sheet, so each sheet's surviving-title set can
+  // be computed and stale charts pruned in one pass.
+  var bySheet = {};
   PENDING_CHARTS_.forEach(function (spec) {
-    var sh = spec.sh, shape = spec.shape, label = spec.label, g = spec.g,
-        chdr = spec.chdr, anchorRow = spec.anchorRow;
-    var bar = shape.chart[0], line = shape.chart[1];
-    // Stripped down after two rounds of "renders a titled but empty box" with
-    // no thrown error (an actually-unsupported option DOES throw — that's how
-    // chartArea.right got caught earlier — so a silent failure here points at
-    // something nested being malformed, not rejected outright). This keeps
-    // only the options load-bearing for a dual-axis bar+line combo: the
-    // range, explicit header count, per-series type/axis/color, bare vAxis
-    // titles, and position. If this still renders empty, the fault is
-    // somewhere more fundamental than chart options and is worth a second
-    // pair of eyes rather than another guess.
-    var chart = sh.newChart().asComboChart()
-      .addRange(sh.getRange(chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length))
-      .setNumHeaders(1)
-      .setOption('title', label + ' — ' + bar[0] + ' vs ' + line[0])
-      .setOption('series', {
-        0: { type: 'bars', targetAxisIndex: 0, color: C.bar, dataLabel: 'value' },
-        1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6, dataLabel: 'value' }
-      })
-      .setOption('vAxes', { 0: { title: bar[0] }, 1: { title: line[0] } })
-      .setOption('hAxis', { title: g.col })
-      .setOption('legend', { position: 'bottom' })
-      .setOption('width', 460)
-      .setOption('height', 260)
-      .setPosition(anchorRow, 6, 0, 0)
-      .build();
-    sh.insertChart(chart);
+    var key = spec.sh.getSheetName();
+    (bySheet[key] = bySheet[key] || { sh: spec.sh, specs: [] }).specs.push(spec);
   });
+
+  Object.keys(bySheet).forEach(function (key) {
+    var sh = bySheet[key].sh, specs = bySheet[key].specs;
+    var existing = sh.getCharts();
+    var wanted = {};
+
+    specs.forEach(function (spec) {
+      var shape = spec.shape, label = spec.label, g = spec.g;
+      var bar = shape.chart[0], line = shape.chart[1];
+      var title = label + ' — ' + bar[0] + ' vs ' + line[0];
+      wanted[title] = true;
+
+      // Match on title, not anchor row: titles are unique per tab and stable,
+      // whereas row positions shift whenever a metric list changes length.
+      var match = null;
+      for (var i = 0; i < existing.length; i++) {
+        if (chartTitle_(existing[i]) === title) { match = existing[i]; break; }
+      }
+
+      // modify() returns a builder bound to the EXISTING chart, so build()
+      // + updateChart() edits it in place and the object ID survives — which
+      // is what keeps a Slides link pointing at it alive across rebuilds.
+      var b = match ? match.modify() : sh.newChart().asComboChart();
+      if (match) b.clearRanges();
+      b.addRange(sh.getRange(spec.chdr, 1, 1 + CHART_PERIODS, 1 + shape.chart.length))
+        .setNumHeaders(1)
+        .setOption('title', title)
+        .setOption('series', {
+          0: { type: 'bars', targetAxisIndex: 0, color: C.bar, dataLabel: 'value' },
+          1: { type: 'line', targetAxisIndex: 1, color: C.line, lineWidth: 3, pointSize: 6, dataLabel: 'value' }
+        })
+        .setOption('vAxes', { 0: { title: bar[0] }, 1: { title: line[0] } })
+        .setOption('hAxis', { title: g.col })
+        .setOption('legend', { position: 'bottom' })
+        .setOption('width', 460)
+        .setOption('height', 260)
+        .setPosition(spec.anchorRow, 6, 0, 0);
+
+      if (match) sh.updateChart(b.build());
+      else       sh.insertChart(b.build());
+    });
+
+    // Prune only what this run genuinely no longer produces — e.g. a chart
+    // left behind after a metric list or slide list changed.
+    existing.forEach(function (ch) {
+      var t = chartTitle_(ch);
+      if (t && !wanted[t]) sh.removeChart(ch);
+    });
+  });
+
   PENDING_CHARTS_ = [];
+}
+
+/** A chart's title option, or '' if it has none. Used as its stable identity. */
+function chartTitle_(chart) {
+  try { return chart.getOptions().get('title') || ''; } catch (e) { return ''; }
 }
 
 /**
@@ -676,6 +713,16 @@ function writeReadme_(ss) {
     ['reports it live per channel.'],
     ['Google\'s ~1,100% ROAS is correct — branded search is run to a deliberate'],
     ['1,000% tROAS.'],
+    [''],
+    ['CHARTS ARE UPDATED IN PLACE, NOT REBUILT — THIS IS LOAD-BEARING FOR SLIDES.'],
+    ['A Slides-linked chart references the embedded chart OBJECT ID, so deleting'],
+    ['and reinserting a chart orphans the slide silently. upsertPendingCharts_'],
+    ['matches each chart by title, edits it via modify() + updateChart() so the'],
+    ['ID survives, and prunes only charts a run no longer produces. Do not'],
+    ['"simplify" that back to removeChart + insertChart.'],
+    ['Linked RANGES (tables) survive a rebuild too, but they are addressed by'],
+    ['A1 range — so changing a metric list shifts every block below it and the'],
+    ['slide then points at the wrong rows. Re-link after any layout change.'],
     [''],
     ['TO REBUILD: Extensions -> Apps Script -> Save -> Run buildReport. Metric sets'],
     ['live in SHAPES, slides in TABS, colours in C.']
