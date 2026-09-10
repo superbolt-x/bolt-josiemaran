@@ -749,6 +749,127 @@ function orderTabs_(ss) {
   var r = ss.getSheetByName('README'); if (r) ss.setActiveSheet(r);
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+   SELF-REFRESH — pull the feed straight from Metabase, no extension needed
+   ════════════════════════════════════════════════════════════════════════════
+
+   PASTE YOUR CREDENTIALS HERE  ▼▼▼  (or better, use Script Properties — see below)
+
+   Two ways to supply them, checked in this order:
+
+   1. Script Properties (recommended — keeps secrets out of the source, so the
+      key is not in version control or visible to anyone who opens the editor):
+        Apps Script editor -> Project Settings (gear) -> Script Properties
+        -> Add property:  METABASE_API_KEY  =  <your key>
+        -> Add property:  METABASE_URL      =  https://<your-metabase-host>
+
+   2. Or just fill the two constants below and leave Script Properties empty.
+
+   Get an API key: Metabase -> Settings (gear) -> Admin settings -> Authentication
+   -> API keys -> Create API key. Give it a group with read access to the
+   Josie Maran database. It is shown once — copy it then.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+var METABASE_API_KEY = 'PASTE_METABASE_API_KEY_HERE';           // <<< PLACEHOLDER
+var METABASE_URL     = 'PASTE_METABASE_BASE_URL_HERE';          // <<< PLACEHOLDER
+                                                                 // e.g. https://metabase.superbolt.agency
+var CARD_ID          = 57484;                                    // "JM – Reporting Feed"
+
+/** Script Properties win over the inline constants above. */
+function mbConfig_() {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('METABASE_API_KEY') || METABASE_API_KEY;
+  var url = props.getProperty('METABASE_URL')     || METABASE_URL;
+  if (!key || key.indexOf('PASTE_') === 0) {
+    throw new Error('No Metabase API key. Set the METABASE_API_KEY script property, ' +
+                    'or fill METABASE_API_KEY at the top of this file.');
+  }
+  if (!url || url.indexOf('PASTE_') === 0) {
+    throw new Error('No Metabase URL. Set the METABASE_URL script property, ' +
+                    'or fill METABASE_URL at the top of this file.');
+  }
+  return { key: key, url: url.replace(/\/+$/, '') };
+}
+
+/**
+ * Overwrite the feed tab with a fresh run of card 57484.
+ *
+ * Uses the CSV endpoint, not JSON, deliberately: CSV preserves the card's
+ * column ORDER, and this whole workbook addresses the feed positionally
+ * (COLS = $A:$AV, period_start = $F). A JSON object's key order is not
+ * guaranteed, so one reordered column would silently shift every lookup.
+ */
+function refreshFeed_() {
+  var cfg = mbConfig_();
+  var res = UrlFetchApp.fetch(
+    cfg.url + '/api/card/' + CARD_ID + '/query/csv',
+    { method: 'post',
+      headers: { 'x-api-key': cfg.key },
+      muteHttpExceptions: true });
+
+  var code = res.getResponseCode();
+  if (code !== 200) {
+    throw new Error('Metabase returned ' + code + ' for card ' + CARD_ID + '. ' +
+                    (code === 401 || code === 403
+                       ? 'Check the API key and that its group can read the database.'
+                       : res.getContentText().slice(0, 300)));
+  }
+
+  var rows = Utilities.parseCsv(res.getContentText());
+  if (!rows.length || rows[0].length < 2) throw new Error('Card returned no columns.');
+
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(FEED) || ss.insertSheet(FEED);
+  sh.clear();
+
+  // Formats BEFORE values, because Sheets coerces on write and the two
+  // date-shaped columns need opposite treatment:
+  //   F period_start -> a REAL date; every lookup key is rebuilt from it
+  //   E period_label -> stay literal TEXT ('8/23/2026'), display only
+  // Getting this backwards is the bug that blanked the MTD tab originally.
+  var n = rows.length;
+  sh.getRange(1, 5, n, 1).setNumberFormat('@');
+  sh.getRange(1, 6, n, 1).setNumberFormat('yyyy-mm-dd');
+
+  sh.getRange(1, 1, n, rows[0].length).setValues(rows);
+  sh.setFrozenRows(1);
+  return n - 1;   // data rows, excluding the header
+}
+
+/**
+ * The autonomous entry point: refresh the feed, then rebuild every tab.
+ * Point a time-driven trigger at THIS, not at buildReport.
+ */
+function refreshAndRebuild() {
+  var n = refreshFeed_();
+  buildReport();
+  SpreadsheetApp.getActive().toast(n + ' feed rows pulled from card ' + CARD_ID, 'Refreshed', 8);
+}
+
+/**
+ * Run ONCE to schedule refreshAndRebuild every weekday at 7am. Re-running is
+ * safe — it clears its own previous trigger first rather than stacking.
+ */
+function installDailyTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'refreshAndRebuild') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('refreshAndRebuild').timeBased().everyDays(1).atHour(7).create();
+  SpreadsheetApp.getActive().toast('refreshAndRebuild scheduled daily at 7am', 'Trigger set', 8);
+}
+
+/** Verify credentials and connectivity without touching the sheet. */
+function testMetabaseConnection() {
+  var cfg = mbConfig_();
+  var res = UrlFetchApp.fetch(cfg.url + '/api/card/' + CARD_ID,
+    { headers: { 'x-api-key': cfg.key }, muteHttpExceptions: true });
+  var msg = res.getResponseCode() === 200
+    ? 'OK — card ' + CARD_ID + ' is "' + JSON.parse(res.getContentText()).name + '"'
+    : 'FAILED ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200);
+  Logger.log(msg);
+  SpreadsheetApp.getActive().toast(msg, 'Metabase', 10);
+}
+
 function colLetter_(n) {
   var s = '';
   while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; }
