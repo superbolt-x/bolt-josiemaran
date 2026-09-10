@@ -42,7 +42,7 @@
 
 var FEED     = 'feed @ 57484';
 var FEED_REF = "'" + FEED + "'";
-var COLS     = '$A:$AV';        // 48 columns
+var COLS     = '$A:$AX';        // 50 columns (48 metrics/flags + 2 slide-config columns)
 var PSTART   = '$F:$F';         // period_start — the date the lookups key on
 var KEY      = '$H:$H';         // lookup_key
 var VALID    = '$AS:$AS';       // data_valid
@@ -176,23 +176,17 @@ var SHAPES = {
   }
 };
 
-// One entry per slide: [row_label, report_level, market].
+// Two kinds of tab now. Most name `shapes` — the slide LIST is read off the
+// feed at runtime (loadSlideConfig_), driven by seeds/segment_report_config.csv
+// in the repo. Adding a segment there (+ a matching campaign_segments.csv
+// entry, + dbt run, + re-pasting the card) makes it appear here with NO
+// script edit. A few tabs (Site, GA4 Channels) aren't segment-driven — their
+// rows come from order_type / a fixed GA4 residual split, not a seed — so
+// they keep an explicit `slides` array, same as before this existed.
 var TABS = {
-  'DTC WoW': { shape: 'dtc', grain: 'week', slides: [
-    ['Paid DTC Overall', 'DTC Segment', 'All'],
-    ['Meta Overall',     'DTC Segment', 'All'],
-    ['Google Overall',   'DTC Segment', 'All']
-  ]},
-  'Sephora Traffic WoW': { shape: 'sephoraTraffic', grain: 'week', slides: [
-    ['Sephora US Traffic', 'Sephora Segment', 'All'],
-    ['Sephora CA Traffic', 'Sephora Segment', 'All'],
-    ['Sephora @ Kohls',    'Sephora Segment', 'All']
-  ]},
-  'Sephora Collab WoW': { shape: 'sephoraCollab', grain: 'week', slides: [
-    ['Sephora US Collab', 'Sephora Segment', 'All'],
-    ['Sephora CA Collab', 'Sephora Segment', 'All'],
-    ['Sephora – Total',   'Sephora Segment', 'All']
-  ]},
+  'DTC WoW': { shape: 'dtc', grain: 'week', shapes: ['dtc'] },
+  'Sephora Traffic WoW': { shape: 'sephoraTraffic', grain: 'week', shapes: ['sephoraTraffic'] },
+  'Sephora Collab WoW': { shape: 'sephoraCollab', grain: 'week', shapes: ['sephoraCollab'] },
   'Site': { shape: 'site', grain: 'week', slides: [
     ['All',          'Site', 'All'],
     ['Web',          'Site', 'All'],
@@ -205,23 +199,13 @@ var TABS = {
   // KPI = one row, current MTD only (Spend/CTR/CVR/Revenue/ROAS/AOV — the deck's
   // "Full Funnel KPIs" slide). Chart = the same 4-week trend as every WoW tab:
   // mtd only ever holds one useful point, so there is no monthly trend to draw.
-  'MTD': { shape: 'dtc', grain: 'mtd', chartGrain: 'week', slides: [
-    ['Paid DTC Overall', 'DTC Segment', 'All'],
-    ['Meta Overall',     'DTC Segment', 'All'],
-    ['Google Overall',   'DTC Segment', 'All']
-  ]},
-  // The 5 real Sephora segments the deck carries an MTD slide for — no
-  // aggregate "Total" row, that was mine, not the client's. Two shapes mixed
-  // in one tab (Traffic charts Spend/CPC, Collab charts Spend/ROAS), so each
-  // slide names its own shape as a 4th element instead of the tab-level
-  // default every other tab uses.
-  'MTD Sephora': { grain: 'mtd', chartGrain: 'week', slides: [
-    ['Sephora US Traffic', 'Sephora Segment', 'All', 'sephoraTraffic'],
-    ['Sephora CA Traffic', 'Sephora Segment', 'All', 'sephoraTraffic'],
-    ['Sephora @ Kohls',    'Sephora Segment', 'All', 'sephoraTraffic'],
-    ['Sephora US Collab',  'Sephora Segment', 'All', 'sephoraCollab'],
-    ['Sephora CA Collab',  'Sephora Segment', 'All', 'sephoraCollab']
-  ]}
+  'MTD': { shape: 'dtc', grain: 'mtd', chartGrain: 'week', shapes: ['dtc'] },
+  // Two shapes mixed in one tab (Traffic charts Spend/CPC, Collab charts
+  // Spend/ROAS) — shapes is an ARRAY here, and loadSlideConfig_ groups by
+  // shape-in-array-order first, sort_order within each shape second, which is
+  // what keeps Traffic's 3 slides ahead of Collab's 2 without needing a
+  // single shared sort key across both shapes in the seed.
+  'MTD Sephora': { grain: 'mtd', chartGrain: 'week', shapes: ['sephoraTraffic', 'sephoraCollab'] }
 };
 
 var C = { header:'#14201e', headerT:'#f6f5f0', block:'#f8f6f2', rule:'#e2ded4',
@@ -232,12 +216,74 @@ function buildReport() {
   var ss = SpreadsheetApp.getActive();
   ensureFeedTab_(ss);
   writeReadme_(ss);
-  Object.keys(TABS).forEach(function (n) { buildTab_(ss, n, TABS[n]); });
+  var slideConfig = loadSlideConfig_(ss);
+  Object.keys(TABS).forEach(function (n) { buildTab_(ss, n, TABS[n], slideConfig); });
   buildCampaigns_(ss);
   buildHealth_(ss);
   upsertPendingCharts_();
   orderTabs_(ss);
   ss.toast('Rebuilt. Feed tab expected: "' + FEED + '"', 'Done', 8);
+}
+
+/**
+ * Read the feed ONCE and return every (report_level, row_label, market) that
+ * carries a non-blank slide_shape — the two trailing columns
+ * gen_reporting_feed.py joins in from seeds/segment_report_config.csv. This
+ * is what a `shapes:`-based TABS entry draws its slide list from, instead of
+ * a hardcoded array: a segment shows up here the moment it exists in the
+ * feed with a shape assigned, no script edit needed.
+ *
+ * Reads header names, not fixed letters — this one function is the exception
+ * to "never trust column position" elsewhere in this file, specifically so
+ * it keeps working if more columns are ever appended after slide_sort.
+ */
+function loadSlideConfig_(ss) {
+  var sh = ss.getSheetByName(FEED);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var values = sh.getDataRange().getValues();
+  var header = values[0];
+  var idx = {};
+  ['report_level', 'row_label', 'market', 'slide_shape', 'slide_sort'].forEach(function (name) {
+    idx[name] = header.indexOf(name);
+  });
+  if (idx.slide_shape < 0 || idx.slide_sort < 0) {
+    throw new Error('Feed tab has no slide_shape/slide_sort columns — re-paste ' +
+                    'the card from metabase/01_reporting_feed.sql (needs the ' +
+                    'slide_config join) and refresh.');
+  }
+
+  var seen = {}, out = [];
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var shape = row[idx.slide_shape];
+    if (!shape) continue;
+    var level = row[idx.report_level], label = row[idx.row_label], market = row[idx.market];
+    var key = level + '|' + label + '|' + market;
+    if (seen[key]) continue;
+    seen[key] = true;
+    out.push({ level: level, label: label, market: market,
+               shape: shape, sort: Number(row[idx.slide_sort]) || 0 });
+  }
+  return out;
+}
+
+/**
+ * cfg.slides if the tab still declares one literally (Site, GA4 Channels —
+ * not segment-driven). Otherwise built from slideConfig: group by shape IN
+ * THE ORDER cfg.shapes lists them, sort_order within each shape — this is
+ * what keeps e.g. MTD Sephora's 3 Traffic slides ahead of its 2 Collab
+ * slides without the seed needing a single sort key shared across shapes.
+ */
+function resolveSlides_(cfg, slideConfig) {
+  if (cfg.slides) return cfg.slides;
+  var out = [];
+  cfg.shapes.forEach(function (shapeName) {
+    slideConfig
+      .filter(function (e) { return e.shape === shapeName; })
+      .sort(function (a, b) { return a.sort - b.sort; })
+      .forEach(function (e) { out.push([e.label, e.level, e.market, shapeName]); });
+  });
+  return out;
 }
 
 function sheet_(ss, name, wipe) {
@@ -263,7 +309,7 @@ function ensureFeedTab_(ss) {
   var sh = ss.insertSheet(FEED);
   sh.getRange('A1').setValue(
     'Connect the Metabase question "JM – Reporting Feed" (57484) here. Header row in ' +
-    'row 1, 48 columns A:AV. Do not edit by hand.' +
+    'row 1, 50 columns A:AX. Do not edit by hand.' +
     (stale ? '  NOTE: a tab named "feed" also exists — the extension names it ' +
              '"feed @ 57484", so the old one is stale and can be deleted.' : ''))
     .setFontColor(C.note).setFontStyle('italic').setWrap(true);
@@ -397,7 +443,8 @@ function buildComparisonBlock_(sh, shape, level, label, market, grain, g, row) {
   return row;
 }
 
-function buildTab_(ss, name, cfg) {
+function buildTab_(ss, name, cfg, slideConfig) {
+  var slides = resolveSlides_(cfg, slideConfig);
   var g     = GRAIN[cfg.grain];
   var cg    = cfg.chartGrain || cfg.grain;
   var gc    = GRAIN[cg];
@@ -413,10 +460,12 @@ function buildTab_(ss, name, cfg) {
     // (see the md CTE in gen_reporting_feed.py), so state that directly
     // rather than reading a date that would just show the 1st every time.
     sh.getRange('B2').setFormula('=TEXT(TODAY()-1,"yyyy-mm-dd")');
-  } else {
+  } else if (slides.length) {
     sh.getRange('B2').setFormula('=IFERROR(TEXT(MAX(FILTER(' + FEED_REF + '!' + PSTART + ', ' +
-      FEED_REF + '!$A:$A="' + cfg.slides[0][1] + '", ' + FEED_REF + '!$D:$D="' + cfg.grain +
+      FEED_REF + '!$A:$A="' + slides[0][1] + '", ' + FEED_REF + '!$D:$D="' + cfg.grain +
       '")),"yyyy-mm-dd"),"— connect feed —")');
+  } else {
+    sh.getRange('B2').setValue('— no segments configured for this tab —');
   }
   sh.getRange('A3').setValue('Health:');
   sh.getRange('B3').setFormula('=COUNTIF(' + FEED_REF + '!$AU:$AU,"FAIL")&" checks failing"')
@@ -424,7 +473,7 @@ function buildTab_(ss, name, cfg) {
   sh.getRange('A2:A3').setFontColor(C.note);
 
   var row = 5, lastShape = null;
-  cfg.slides.forEach(function (sl) {
+  slides.forEach(function (sl) {
     var label = sl[0], level = sl[1], market = sl[2];
     var shape = SHAPES[sl[3] || cfg.shape];
     lastShape = shape;
@@ -473,7 +522,8 @@ function buildTab_(ss, name, cfg) {
   // Only caption a legend if the last slide's shape actually carries a flag —
   // sephoraTraffic has none, so a tab entirely made of Traffic slides (like
   // Sephora Traffic WoW) gets no caption rather than a stale amber/grey one.
-  if (lastShape.flag) {
+  // lastShape can be null if a shapes-based tab resolved to zero slides.
+  if (lastShape && lastShape.flag) {
     sh.getRange(row, 1).setValue(
       lastShape.flagStyle === 'amber'
         ? 'Amber = real Sephora spend with conversions unreported (no catalog-segment feedback). Act on it; do not fill it in.'
@@ -646,7 +696,7 @@ function writeReadme_(ss) {
     ['Josie Maran — Automated Reporting'],
     [''],
     ['FEED TAB: "' + FEED + '"  — the extension appends the question id (57484).'],
-    ['48 columns A:AV. Never edit, sort or format that tab.'],
+    ['50 columns A:AX. Never edit, sort or format that tab.'],
     [''],
     ['LAYOUT MATCHES THE DECK. Each block is one slide: metrics down the rows,'],
     ['two date columns plus % change, and a ' + CHART_PERIODS + '-period combo chart beside it'],
@@ -702,6 +752,16 @@ function writeReadme_(ss) {
     ['SEGMENTS COME FROM CAMPAIGN IDS, NOT NAMES — seeds/campaign_segments.csv in'],
     ['bolt-josiemaran, from the reporting deck. An unmapped id gets segment'],
     ['"Unmapped", appears on NO segment row, and is reported on the Health tab.'],
+    [''],
+    ['WHICH SEGMENTS GET THEIR OWN SLIDE IS SEED-DRIVEN, NOT SCRIPT-HARDCODED.'],
+    ['seeds/segment_report_config.csv (row_label, shape, sort_order) joins into'],
+    ['the card as slide_shape/slide_sort (cols AW/AX). loadSlideConfig_ reads'],
+    ['those off the feed at runtime for any TABS entry that declares `shapes`'],
+    ['instead of a literal `slides` array. A new segment (new campaign_segments.csv'],
+    ['row + a row here + dbt run + re-paste the card) appears on the next'],
+    ['refreshAndRebuild() with no Apps Script edit. Site and GA4 Channels are'],
+    ['not segment-driven and still use a literal `slides` array — that is fine,'],
+    ['not a gap to close.'],
     [''],
     ['GREY = DTC BLENDED METRICS START THE WEEK OF 2026-07-27. Shopify order history'],
     ['begins there. August 2026 is the only complete month, so no blended MoM until'],

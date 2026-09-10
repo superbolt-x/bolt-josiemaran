@@ -15,10 +15,12 @@ branches are emitted from it, so they cannot diverge.
 The 25 slots are positional and identical across levels. A level either sums a
 slot or emits a typed NULL — nothing else.
 """
+import csv
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEST = ROOT / "metabase" / "01_reporting_feed.sql"
+SLIDE_CONFIG_CSV = ROOT / "seeds" / "segment_report_config.csv"
 
 WEEKS, MONTHS = 7, 4
 
@@ -124,6 +126,58 @@ LEVELS = [
 
 SITE_SRC = {"site_orders": "shopify_orders", "site_first_orders": "shopify_first_orders",
             "site_new_customers": "shopify_new_customers", "site_gross_sales": "shopify_gross_sales"}
+
+
+def slide_config_cte():
+    """
+    Which row_labels get their own block in the Gsheet, on which shape, in
+    what order -- from seeds/segment_report_config.csv. This is what lets a
+    new segment (a new campaign_id + segment in campaign_segments.csv, e.g.
+    a real "TikTok Overall" replacing the deck's current placeholder slide)
+    show up in the sheet on the next refreshAndRebuild() with zero script
+    edits: build_gsheet.gs reads this straight off the feed instead of
+    carrying its own hardcoded slide list.
+
+    Joined on row_label, which is already the CARD's synthesized label
+    (e.g. 'Paid DTC Overall' is a rollup name computed in SQL, not a literal
+    `segment` value in the warehouse) -- so this needs no special-casing for
+    rollup vs. raw segment names, it just matches whatever row_label the
+    card already produces.
+    """
+    with open(SLIDE_CONFIG_CSV, newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        raise ValueError(f"{SLIDE_CONFIG_CSV} is empty")
+
+    lines = []
+    for i, r in enumerate(rows):
+        row_label = r["row_label"].strip().replace("'", "''")
+        shape = r["shape"].strip().replace("'", "''")
+        sort_order = int(r["sort_order"])
+        if i == 0:
+            # Explicit casts on the FIRST row only. Redshift sizes a UNION ALL
+            # branch's varchar width from the first literal it sees -- without
+            # this, a later, longer row_label truncates silently. This is the
+            # exact bug that once made every campaign segment read 'Unmapped'
+            # in macros/jm_campaign_segments.sql; same fix, same reason.
+            lines.append(
+                f"        select '{row_label}'::varchar(64) as cfg_row_label,\n"
+                f"               '{shape}'::varchar(32) as shape,\n"
+                f"               {sort_order}::int as sort_order"
+            )
+        else:
+            lines.append(f"        union all select '{row_label}', '{shape}', {sort_order}")
+
+    return (
+        "slide_config as (\n\n"
+        "    -- seeds/segment_report_config.csv, generated -- see slide_config_cte()\n"
+        "    -- in scripts/gen_reporting_feed.py. cfg_row_label is deliberately NOT\n"
+        "    -- named row_label: the join below needs both columns in scope\n"
+        "    -- unambiguously, and this avoids having to qualify every other\n"
+        "    -- column in the final select just to disambiguate one join key.\n"
+        + "\n".join(lines) + "\n"
+        "),\n\n"
+    )
 
 
 def branch(lv, src, grain):
@@ -409,7 +463,7 @@ health as (
 
 """.replace("@@NULLS@@", ",\n".join(f"        {NULLS[s]}".ljust(48) + f"as {s}" for s in METRIC_SLOTS))
 
-FINAL = """unioned as (
+FINAL = """@@SLIDE_CONFIG@@unioned as (
 @@UNION@@
 )
 
@@ -510,9 +564,17 @@ select
     end                                                          as has_catalog_feedback,
 
     status,
-    detail
+    detail,
+
+    -- Which segments get their own Gsheet block, and in what order. NULL for
+    -- everything else (Campaign detail rows, Health, Site, GA4 Channel) --
+    -- those aren't segment-driven and build_gsheet.gs still lists them
+    -- directly in TABS. See slide_config_cte() above.
+    slide_config.shape                                          as slide_shape,
+    slide_config.sort_order                                     as slide_sort
 
 from unioned
+    left join slide_config on unioned.row_label = slide_config.cfg_row_label
 order by
     case report_level when 'Health' then 0 when 'DTC Segment' then 1
          when 'Sephora Segment' then 2 when 'GA4 Channel' then 3
@@ -529,7 +591,8 @@ order by
 
 
 def main():
-    sql = HEADER + "\n\n".join(level_cte(l) for l in LEVELS) + "\n\n" + HEALTH + FINAL
+    sql = (HEADER + "\n\n".join(level_cte(l) for l in LEVELS) + "\n\n" + HEALTH
+           + FINAL.replace("@@SLIDE_CONFIG@@", slide_config_cte()))
     DEST.write_text(sql)
     n_cols = 7 + len(METRIC_SLOTS) + 2
     print(f"wrote {DEST.relative_to(ROOT)}  ({len(sql):,} chars, {sql.count(chr(10)):,} lines)")

@@ -1,0 +1,9 @@
+row_label,shape,sort_order
+Paid DTC Overall,dtc,1
+Meta Overall,dtc,2
+Google Overall,dtc,3
+Sephora US Traffic,sephoraTraffic,1
+Sephora CA Traffic,sephoraTraffic,2
+Sephora @ Kohls,sephoraTraffic,3
+Sephora US Collab,sephoraCollab,1
+Sephora CA Collab,sephoraCollab,2

@@ -1266,6 +1266,20 @@ health as (
     ) h
 ),
 
+slide_config as (
+
+        select 'Paid DTC Overall'::varchar(64) as cfg_row_label,
+               'dtc'::varchar(32) as shape,
+               1::int as sort_order
+        union all select 'Meta Overall', 'dtc', 2
+        union all select 'Google Overall', 'dtc', 3
+        union all select 'Sephora US Traffic', 'sephoraTraffic', 1
+        union all select 'Sephora CA Traffic', 'sephoraTraffic', 2
+        union all select 'Sephora @ Kohls', 'sephoraTraffic', 3
+        union all select 'Sephora US Collab', 'sephoraCollab', 1
+        union all select 'Sephora CA Collab', 'sephoraCollab', 2
+),
+
 unioned as (
     select * from dtc_segment
     union all select * from sephora_segment
@@ -1355,9 +1369,13 @@ select
     end                                                          as has_catalog_feedback,
 
     status,
-    detail
+    detail,
+
+    slide_config.shape                                          as slide_shape,
+    slide_config.sort_order                                     as slide_sort
 
 from unioned
+    left join slide_config on unioned.row_label = slide_config.cfg_row_label
 order by
     case report_level when 'Health' then 0 when 'DTC Segment' then 1
          when 'Sephora Segment' then 2 when 'GA4 Channel' then 3
