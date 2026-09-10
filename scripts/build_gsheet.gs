@@ -770,8 +770,8 @@ function orderTabs_(ss) {
    Josie Maran database. It is shown once — copy it then.
    ════════════════════════════════════════════════════════════════════════════ */
 
-var METABASE_API_KEY = 'PASTE_METABASE_API_KEY_HERE';           // <<< PLACEHOLDER
-var METABASE_URL     = 'PASTE_METABASE_BASE_URL_HERE';          // <<< PLACEHOLDER
+var METABASE_API_KEY = 'mb_PjrsHJuSdp1tD1d+FnnVOT5URJlbgyD6JRGLJsPRKlw=';           // <<< PLACEHOLDER
+var METABASE_URL     = 'https://metabase.superbolt.agency';          // <<< PLACEHOLDER
                                                                  // e.g. https://metabase.superbolt.agency
 var CARD_ID          = 57484;                                    // "JM – Reporting Feed"
 
