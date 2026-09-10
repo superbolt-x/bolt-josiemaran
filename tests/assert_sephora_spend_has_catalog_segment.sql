@@ -15,7 +15,7 @@
     purchases attached.
 */
 
-with trailing as (
+with trailing_30d as (
     select
         sum(spend)                                                       as sephora_spend,
         sum(case when coalesce(cs_purchases, 0) = 0 then spend else 0 end) as unmeasured_spend
@@ -30,5 +30,5 @@ select
     sephora_spend,
     unmeasured_spend,
     round(100.0 * unmeasured_spend / nullif(sephora_spend, 0), 1) as pct_unmeasured
-from trailing
+from trailing_30d
 where unmeasured_spend / nullif(sephora_spend, 0) > 0.20
