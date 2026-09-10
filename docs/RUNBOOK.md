@@ -247,3 +247,50 @@ compiles every model and macro and validates all schema tests. It caught two
 `accepted_values` lists that were stale after GA4 rows were added (`channel`
 missing 'GA4', `segment` missing 'Unattributed Paid' and 'Other'), which no
 amount of SQL-only linting would have found.
+
+## Triggering Apps Script without edit access
+
+Marketing can't run Apps Script themselves, and handing out a content-write
+OAuth token to automate that was a bad trade (see the security discussion in
+session history — write access to Apps Script is account-wide, not
+project-scoped, and Google doesn't support service accounts for it). What
+this uses instead: an **execution-only** grant. It can invoke a function
+already deployed in this project; it cannot edit the project's code at all,
+and it cannot touch any spreadsheet other than this one.
+
+**How it's scoped, concretely:**
+
+- The project's `appsscript.json` declares exactly three OAuth scopes:
+  `spreadsheets.currentonly` (this spreadsheet only, not every sheet the
+  authorizing account can reach), `script.external_request` (the Metabase
+  call), `script.scriptapp` (trigger management).
+- Deployed as **API Executable** (Deploy → New deployment), a deployment
+  type with no path to `projects.updateContent` — content-write is a
+  categorically different scope Google enforces at the API level, not a
+  policy this setup merely follows.
+- Verified empirically, not just by scope inspection: a content-write
+  attempt with this token returns `403 ACCESS_TOKEN_SCOPE_INSUFFICIENT`,
+  and so does a read attempt against a different (public) spreadsheet — the
+  `currentonly` binding is actually enforced, confirmed against Google's
+  live API, not assumed from the scope name.
+
+**Credentials** live at `~/.config/gas-exec/` on the server — `oauth_client.json`
+(the OAuth client from Google Cloud project `superbolt-agency-etl`) and
+`tokens.json` (refresh token, from the one-time manual consent flow). Both
+`chmod 600`, both outside any git repo. Never write either into this repo.
+
+**To run something:**
+
+```bash
+python3 ~/python/dataengineering/.shared/gas_exec.py 18VE39XIFG5y7ZwVUeOwMCEC84izC7zoDOuUrQfaaz6RF3j30C5PjqPS6 refreshAndRebuild
+```
+
+(Script ID above is Josie Maran's — not secret on its own, it's inert without
+the token.) Exits non-zero on a real failure, including a script-side
+exception the Execution API reports as HTTP 200 with an `error` field — the
+CLI checks for that explicitly rather than trusting the HTTP status alone.
+
+**If this ever needs to be revoked:** whoever did the OAuth consent can pull
+it from their Google Account → Security → Third-party access, independent of
+rotating anything else. That kills `tokens.json`'s refresh token immediately;
+getting it working again means redoing the manual consent flow from scratch.
