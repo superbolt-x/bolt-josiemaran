@@ -770,8 +770,15 @@ function orderTabs_(ss) {
    Josie Maran database. It is shown once — copy it then.
    ════════════════════════════════════════════════════════════════════════════ */
 
-var METABASE_API_KEY = 'mb_PjrsHJuSdp1tD1d+FnnVOT5URJlbgyD6JRGLJsPRKlw=';           // <<< PLACEHOLDER
-var METABASE_URL     = 'https://metabase-superbolt.com';          // <<< PLACEHOLDER
+// DO NOT PUT REAL VALUES HERE. This file is committed to a public-ish git
+// history; anything typed on these two lines gets pushed in plaintext and
+// stays recoverable from old commits even after being edited out later. A
+// real key WAS committed here once already (rotated after discovery) —
+// use Script Properties instead: Project Settings (gear) -> Script
+// Properties -> METABASE_API_KEY / METABASE_URL. That storage is per-project,
+// never touches source, and is what mbConfig_() below checks FIRST.
+var METABASE_API_KEY = 'PASTE_METABASE_API_KEY_HERE';           // <<< PLACEHOLDER — leave as-is, use Script Properties
+var METABASE_URL     = 'PASTE_METABASE_BASE_URL_HERE';          // <<< PLACEHOLDER — leave as-is, use Script Properties
                                                                  // e.g. https://metabase.superbolt.agency
 var CARD_ID          = 57484;                                    // "JM – Reporting Feed"
 
