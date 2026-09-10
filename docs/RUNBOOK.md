@@ -194,7 +194,31 @@ GitHub on its own cadence, so a transformation fired immediately after a push
 runs against the PREVIOUS commit. Running dbt here uses the working tree as it
 is, which removes that race entirely.
 
-The 14 private `superbolt-x` packages are declared in `packages.yml` with
+**One profiles.yml, one login, many clients — not one profile per repo.**
+Every `bolt-<client>` repo on this box declares the SAME dbt profile name,
+`bolt_blueprint` (it's a forked blueprint, not a distinct dbt project per
+client), and the whole fleet sits on one Redshift cluster under one login —
+confirmed by querying both `josiemaran` and `fabric` as the same warehouse
+user. So `~/.dbt/profiles.yml` holds ONE profile with ONE set of credentials
+and a `--target <client>` per client, not a separate file or profile per repo.
+
+The target list is generated, not hand-written, because a repo's name is not
+a reliable database name — `bolt-mate`'s database is `matethelabel`, not
+`mate`. Regenerate after adding a new client repo:
+
+```bash
+python3 ~/python/dataengineering/.shared/gen_dbt_profile.py --databases=<comma-separated list from pg_database>
+```
+
+It resolves each repo slug against the real database list (exact match, or a
+unique fuzzy match; anything ambiguous is flagged instead of guessed), and
+never overwrites credentials already filled in.
+
+**No default target, on purpose.** Every dbt command below must pass
+`--target <client>` explicitly — there is no "forgot the flag, ran it against
+someone else's database" failure mode.
+
+The 14 private `superbolt-x` packages in `packages.yml` are declared with
 HTTPS URLs. There is no HTTPS credential on this box, but there is an SSH key,
 so rewrite the URLs for the command rather than editing `packages.yml`:
 
@@ -205,19 +229,17 @@ GIT_CONFIG_VALUE_0=https://github.com/ \
 /home/ubuntu/.dbt-venv/bin/dbt deps
 ```
 
-**Still required:** a `profiles.yml` for profile `bolt_blueprint` with Redshift
-host/user/password/port/dbname. The convention used elsewhere in
-`dataengineering/` is a `.keys/redshift-credentials.json` holding
-`{"host","user","password"}`, but that file is not present on this box. Until
-it is, `dbt parse` and `dbt deps` work; `dbt run`, `dbt seed` and `dbt test`
+**Still required:** host/user/password in `~/.dbt/profiles.yml` — three
+placeholders, filled once, shared by every client target. Until they're
+filled, `dbt parse` and `dbt deps` work; `dbt run`, `dbt seed` and `dbt test`
 cannot connect.
 
-Once credentials exist, the loop for a segment change is:
+Once credentials exist, the loop for a segment change on this client is:
 
 ```bash
-/home/ubuntu/.dbt-venv/bin/dbt seed  --select campaign_segments
-/home/ubuntu/.dbt-venv/bin/dbt run   --select +blended_performance
-/home/ubuntu/.dbt-venv/bin/dbt test  --select blended_performance
+/home/ubuntu/.dbt-venv/bin/dbt seed  --target josiemaran --select campaign_segments
+/home/ubuntu/.dbt-venv/bin/dbt run   --target josiemaran --select +blended_performance
+/home/ubuntu/.dbt-venv/bin/dbt test  --target josiemaran --select blended_performance
 ```
 
 `dbt parse` is worth running on every change even without credentials — it
