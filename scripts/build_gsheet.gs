@@ -771,7 +771,7 @@ function orderTabs_(ss) {
    ════════════════════════════════════════════════════════════════════════════ */
 
 var METABASE_API_KEY = 'mb_PjrsHJuSdp1tD1d+FnnVOT5URJlbgyD6JRGLJsPRKlw=';           // <<< PLACEHOLDER
-var METABASE_URL     = 'https://metabase.superbolt.agency';          // <<< PLACEHOLDER
+var METABASE_URL     = 'https://metabase-superbolt.com';          // <<< PLACEHOLDER
                                                                  // e.g. https://metabase.superbolt.agency
 var CARD_ID          = 57484;                                    // "JM – Reporting Feed"
 

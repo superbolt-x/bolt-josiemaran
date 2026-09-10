@@ -299,6 +299,15 @@ HEALTH = """health_freshness as (
 ),
 
 health_catalog as (
+    -- Scoped to Collab segments ONLY. Traffic-objective campaigns (US/CA
+    -- Traffic, @ Kohls) never carry catalog-segment tracking, for any
+    -- campaign, ever -- the @ Kohls Traffic campaign has run since 2025-09
+    -- with $281k lifetime spend and exactly 0 lifetime catalog purchases.
+    -- That's not a config gap, it's how Traffic-objective campaigns behave;
+    -- catalog-segment tracking is tied to the Purchase objective. Checking
+    -- all Sephora segments here produced three PERMANENT FAIL rows (Traffic
+    -- x3) that could never pass -- the same alert-fatigue bug already fixed
+    -- once in tests/assert_sephora_spend_has_catalog_segment.sql.
     select
         segment                                 as subject,
         'catalog-feedback'                      as check_name,
@@ -309,6 +318,7 @@ health_catalog as (
                 / nullif(sum(spend),0) > 0.20 then 'FAIL' else 'OK' end as status
     from reporting.josiemaran_blended_performance
     where date_granularity = 'day' and business_line = 'Sephora'
+      and segment in ('Sephora US Collab', 'Sephora CA Collab')
       and date >= dateadd(day, -30, current_date)
     group by 1
 ),

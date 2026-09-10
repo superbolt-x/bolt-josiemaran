@@ -1155,6 +1155,7 @@ health_freshness as (
 ),
 
 health_catalog as (
+
     select
         segment                                 as subject,
         'catalog-feedback'                      as check_name,
@@ -1165,6 +1166,7 @@ health_catalog as (
                 / nullif(sum(spend),0) > 0.20 then 'FAIL' else 'OK' end as status
     from blended_performance
     where date_granularity = 'day' and business_line = 'Sephora'
+      and segment in ('Sephora US Collab', 'Sephora CA Collab')
       and date >= dateadd(day, -30, current_date)
     group by 1
 ),
