@@ -10,6 +10,10 @@
   GRAIN  one row per  channel × segment × business_line × market × order_type
                       × campaign_id × campaign_name × date × date_granularity
 
+         A campaign normally produces ONE row per date. The exception is a
+         campaign SPLIT ACROSS SEGMENTS at adset level, which produces one row
+         per segment — see "Adset-level segments" below.
+
   ── Segments come from CAMPAIGN IDs, not campaign names ─────────────────────
   The mapping lives in seeds/campaign_segments.csv and is taken from the
   reporting deck. The account was inherited from the client and carries three
@@ -22,10 +26,31 @@
       Google Overall        4 Google campaigns          ┐ Paid DTC Overall
       Meta Overall          2 Meta campaigns            ┘ (dtc_overall = true)
       Sephora US Traffic    1 Meta + 2 TikTok
-      Sephora US Collab     1 Meta
+      Sephora US Collab     1 Meta + 1 Meta ADSET
       Sephora CA Traffic    1 Meta + 2 TikTok
-      Sephora CA Collab     1 Meta
+      Sephora CA Collab     1 Meta + 1 Meta ADSET
       Sephora @ Kohls       1 Meta
+
+  ── Adset-level segments ────────────────────────────────────────────────────
+  Campaign 120250632750520303 ("Sephora Collab - Purchase - Catch All") holds
+  a US adset and a CA adset that belong to DIFFERENT segments. A campaign_id →
+  segment map cannot express that, so seeds/campaign_segments.csv carries an
+  optional adset_id: blank maps the whole campaign (every other row), non-blank
+  maps one adset. Meta therefore reads at ADSET grain, resolves the segment per
+  adset in `meta`, and collapses straight back to campaign grain — so only a
+  split campaign yields more than one row, and every other campaign is
+  byte-identical to before.
+
+  gen_segment_macro.py REFUSES a seed that maps one campaign both as a whole
+  and by adset. That is not stylistic: with both present, one spend row matches
+  two mapping rows and the campaign silently double-counts. Enforcing it at
+  edit time is why the join below needs no precedence logic.
+
+  Two Redshift landmines are load-bearing here and should not be "cleaned up":
+  the mapping is INLINED at each join site rather than shared as a CTE, and a
+  campaign-level row carries adset_id = '' rather than NULL — `s.adset_id is
+  null` in a join predicate over that UNION ALL makes the planner fail with a
+  bare "Assert".
 
   Anything else → segment 'Unmapped'. Deliberately visible rather than folded
   into a total: ~$2.9M of lifetime spend is historical campaigns the deck does
@@ -105,17 +130,29 @@
 
 with
 
-segment_map as (
-    {{ jm_campaign_segments() }}
-),
-
 -- ─── PAID ───────────────────────────────────────────────────────────────────
 
 meta_base as (
 
+    /*  ADSET grain, not campaign grain — and this is load-bearing.
+
+        Campaign 120250632750520303 ("Sephora Collab - Purchase - Catch All")
+        holds a US adset and a CA adset that belong to DIFFERENT report
+        segments. A campaign_id → segment map physically cannot express that,
+        so the mapping has to resolve per adset. The rows collapse straight
+        back to campaign grain in `meta` below, so the table's output grain is
+        unchanged except that a split campaign yields one row per segment.
+
+        Verified equivalent to the campaign table it replaces, 2026-09-01..20:
+        7 of 8 campaigns match to the cent; the eighth differs by $0.27 on
+        $14,905 (0.002%, 5 clicks of 24,979 — a deleted ad). History is
+        identical (both from 2023-07-18), so nothing historical shifts.      */
+
     select
         campaign_id::varchar  as campaign_id,
         campaign_name,
+        adset_id::varchar     as adset_id,
+        adset_name,
         date,
         date_granularity,
         sum(spend)            as spend,
@@ -124,31 +161,96 @@ meta_base as (
         sum(purchases)        as paid_purchases,
         sum(revenue)          as paid_revenue,
         sum(add_to_cart)      as paid_add_to_cart
-    from {{ source('reporting', 'josiemaran_facebook_performance_by_campaign') }}
-    group by 1, 2, 3, 4
+    from {{ source('reporting', 'josiemaran_facebook_performance_by_ad') }}
+    group by 1, 2, 3, 4, 5, 6
 
 ),
 
 meta as (
 
+    /*  Resolves the segment at ADSET grain, then collapses back to campaign
+        grain. For every campaign mapped as a whole this is a no-op — all its
+        adsets carry the same segment and the same campaign_name, so they
+        re-aggregate into exactly the single row this CTE produced before.
+        A split campaign is the only case that yields more than one row, one
+        per segment, which is the point.
+
+        The join to segment_map needs no precedence logic because
+        gen_segment_macro.py refuses a seed that maps one campaign both as a
+        whole and by adset — so `s.adset_id = '' or s.adset_id = m.adset_id`
+        can never match two mapping rows for the same spend row. That invariant
+        is enforced at edit time rather than papered over here.
+
+        campaign_name carries the adset name appended when the match was
+        adset-level, so the Campaigns tab can tell the two halves of a split
+        campaign apart instead of showing the same label twice.              */
+
     select
         'Meta'                  as channel,
         'meta'                  as platform,
         m.campaign_id,
-        m.campaign_name,
+
+        case when max(nullif(m.mapped_adset, '')) is not null
+             then max(m.campaign_name) || ' — ' || max(m.adset_name)
+             else max(m.campaign_name) end          as campaign_name,
+
+        max(m.map_segment)       as map_segment,
+        max(m.map_business_line) as map_business_line,
+        bool_or(m.map_dtc_overall) as map_dtc_overall,
+
         m.date,
         m.date_granularity,
-        m.spend, m.impressions, m.clicks,
-        m.paid_purchases, m.paid_revenue, m.paid_add_to_cart,
-        cs.cs_purchases,
-        cs.cs_revenue,
-        cs.cs_offline_purchases,
-        cs.cs_add_to_cart
-    from meta_base m
-    left join {{ ref('facebook_catalog_segment_performance') }} cs
-        on  cs.campaign_id      = m.campaign_id
-        and cs.date             = m.date
-        and cs.date_granularity = m.date_granularity
+        sum(m.spend)              as spend,
+        sum(m.impressions)        as impressions,
+        sum(m.clicks)             as clicks,
+        sum(m.paid_purchases)     as paid_purchases,
+        sum(m.paid_revenue)       as paid_revenue,
+        sum(m.paid_add_to_cart)   as paid_add_to_cart,
+        sum(m.cs_purchases)       as cs_purchases,
+        sum(m.cs_revenue)         as cs_revenue,
+        sum(m.cs_offline_purchases) as cs_offline_purchases,
+        sum(m.cs_add_to_cart)     as cs_add_to_cart
+
+    from (
+        select
+            b.campaign_id,
+            b.campaign_name,
+            b.adset_id,
+            b.adset_name,
+            b.date,
+            b.date_granularity,
+            b.spend, b.impressions, b.clicks,
+            b.paid_purchases, b.paid_revenue, b.paid_add_to_cart,
+            cs.cs_purchases,
+            cs.cs_revenue,
+            cs.cs_offline_purchases,
+            cs.cs_add_to_cart,
+            s.segment        as map_segment,
+            s.business_line  as map_business_line,
+            s.dtc_overall    as map_dtc_overall,
+            s.adset_id       as mapped_adset
+        from meta_base b
+        left join {{ ref('facebook_catalog_segment_performance') }} cs
+            on  cs.campaign_id      = b.campaign_id
+            and cs.adset_id         = b.adset_id
+            and cs.date             = b.date
+            and cs.date_granularity = b.date_granularity
+        -- Inlined, not a shared `segment_map` CTE. Redshift's planner throws a
+        -- bare "Assert" the moment this mapping is a CTE referenced twice with
+        -- one of the references carrying a predicate in a join condition — the
+        -- same landmine that forced the single full outer join in paid_ga4
+        -- below. The macro emits literal SQL, so inlining it at each use site
+        -- costs ~17 duplicated lines in the compiled output and nothing else.
+        left join ( {{ jm_campaign_segments() }} ) s
+            on  s.platform    = 'meta'
+            and s.campaign_id = b.campaign_id
+            and (s.adset_id = '' or s.adset_id = b.adset_id)
+    ) m
+
+    -- Grouping on the RESOLVED segment is what splits the catch-all campaign
+    -- into its US and CA halves while leaving every other campaign at one row.
+    group by m.campaign_id, m.date, m.date_granularity,
+             m.map_segment, m.map_business_line, m.map_dtc_overall
 
 ),
 
@@ -159,6 +261,13 @@ google as (
         'google'                as platform,
         campaign_id::varchar    as campaign_id,
         campaign_name,
+        -- Google and TikTok resolve their segment from the campaign-level join
+        -- in `paid` below, as they always have; only Meta pre-resolves, because
+        -- only Meta has a campaign that spans two segments. Positional NULLs
+        -- keep the three branches union-compatible.
+        cast(null as varchar(64)) as map_segment,
+        cast(null as varchar(16)) as map_business_line,
+        cast(null as boolean)     as map_dtc_overall,
         date,
         date_granularity,
         sum(spend)                          as spend,
@@ -177,7 +286,9 @@ google as (
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
     from {{ source('reporting', 'josiemaran_googleads_performance_by_campaign') }}
-    group by 1, 2, 3, 4, 5, 6
+    -- 1-9, not 1-6: the three map_* passthrough columns sit between
+    -- campaign_name and date, so the positions after them all shifted.
+    group by 1, 2, 3, 4, 5, 6, 7, 8, 9
 
 ),
 
@@ -206,6 +317,9 @@ tiktok as (
         'tiktok'                    as platform,
         campaign_id::varchar        as campaign_id,
         campaign_name,
+        cast(null as varchar(64))   as map_segment,
+        cast(null as varchar(16))   as map_business_line,
+        cast(null as boolean)       as map_dtc_overall,
         date,
         date_granularity,
         sum(cost)                   as spend,
@@ -219,7 +333,7 @@ tiktok as (
         cast(null as double precision) as cs_offline_purchases,
         cast(null as double precision) as cs_add_to_cart
     from {{ source('reporting', 'josiemaran_tiktok_performance_by_campaign') }}
-    group by 1, 2, 3, 4, 5, 6
+    group by 1, 2, 3, 4, 5, 6, 7, 8, 9
 
 ),
 
@@ -328,6 +442,9 @@ paid_ga4 as (
 
         p.channel,
         p.campaign_name,
+        p.map_segment,
+        p.map_business_line,
+        p.map_dtc_overall,
         p.spend,
         p.impressions,
         p.clicks,
@@ -366,18 +483,23 @@ paid as (
     select
         case when pg.has_paid then pg.channel else 'GA4' end   as channel,
 
-        case when pg.has_paid then coalesce(s.segment, 'Unmapped')
+        -- map_* is Meta's adset-aware resolution, already done upstream; `s`
+        -- is the campaign-level join Google and TikTok still use. Meta never
+        -- falls through to `s`, so the two can never disagree.
+        case when pg.has_paid then coalesce(pg.map_segment, s.segment, 'Unmapped')
              when pg.platform = 'other' then 'Other'
              else 'Unattributed Paid' end                      as segment,
 
-        case when pg.has_paid then coalesce(s.business_line, 'Unmapped')
+        case when pg.has_paid
+                  then coalesce(pg.map_business_line, s.business_line, 'Unmapped')
              else 'DTC' end                                    as business_line,
 
-        case when pg.has_paid then coalesce(s.dtc_overall, false)
+        case when pg.has_paid
+                  then coalesce(pg.map_dtc_overall, s.dtc_overall, false)
              else false end                                    as in_dtc_overall,
 
         case when pg.has_paid
-                  then {{ jm_market_from_segment("coalesce(s.segment, 'Unmapped')") }}
+                  then {{ jm_market_from_segment("coalesce(pg.map_segment, s.segment, 'Unmapped')") }}
              else 'Unknown' end                                as market,
 
         cast(null as varchar(16))      as order_type,
@@ -411,9 +533,18 @@ paid as (
         cast(null as double precision) as shopify_discounts
 
     from paid_ga4 pg
-    left join segment_map s
+    left join ( {{ jm_campaign_segments() }} ) s
         on  s.platform    = pg.platform
         and s.campaign_id = pg.campaign_id
+        -- CAMPAIGN-LEVEL rows only. Adset-level rows are Meta's, and Meta has
+        -- already resolved them upstream in `meta` — matching them again here
+        -- does not change any value (the coalesce above prefers the resolved
+        -- one) but it DUPLICATES THE ROW: a campaign split across two segments
+        -- has two mapping rows, so each of its two resolved rows matched both
+        -- and the campaign's spend came out exactly 2x. Every other campaign
+        -- was unaffected, which is what made it look like a plausible increase
+        -- rather than an obvious break.
+        and s.adset_id = ''
 
 ),
 

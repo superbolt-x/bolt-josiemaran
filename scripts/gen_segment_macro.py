@@ -25,17 +25,44 @@ if not rows:
     sys.exit("campaign_segments.csv is empty")
 
 seen = {}
+grain_of = {}   # (platform, campaign_id) -> ('campaign'|'adset', first line seen)
+
 for i, r in enumerate(rows, 2):
-    key = (r["platform"].strip(), r["campaign_id"].strip())
+    adset = r.get("adset_id", "").strip()
+    key = (r["platform"].strip(), r["campaign_id"].strip(), adset)
     if key in seen:
         sys.exit(f"line {i}: duplicate {key} (already on line {seen[key]})")
     seen[key] = i
+
+    # A campaign maps EITHER as a whole (blank adset_id) OR adset by adset --
+    # never both. Mixing the two would let one spend row match two mapping
+    # rows in blended_performance's single LEFT JOIN, silently fanning out
+    # and double-counting it. Forbidding the mix here means the join needs no
+    # precedence logic at all, which keeps that SQL simple and keeps this
+    # invariant stated in one place instead of implied by a query.
+    grain = "adset" if adset else "campaign"
+    camp_key = (r["platform"].strip(), r["campaign_id"].strip())
+    if camp_key in grain_of:
+        prev_grain, prev_line = grain_of[camp_key]
+        if prev_grain != grain:
+            sys.exit(
+                f"line {i}: campaign {camp_key[1]} is mapped at {grain} level here "
+                f"but at {prev_grain} level on line {prev_line}. A campaign maps "
+                f"either as a whole or adset by adset, never both."
+            )
+    else:
+        grain_of[camp_key] = (grain, i)
+
     if r["business_line"].strip() not in VALID_BL:
         sys.exit(f"line {i}: business_line must be one of {sorted(VALID_BL)}")
     if r["dtc_overall"].strip().lower() not in VALID_BOOL:
         sys.exit(f"line {i}: dtc_overall must be true/false")
     if not r["campaign_id"].strip().isdigit():
         sys.exit(f"line {i}: campaign_id must be numeric")
+    if adset and not adset.isdigit():
+        sys.exit(f"line {i}: adset_id must be numeric when present")
+    if adset and r["platform"].strip() != "meta":
+        sys.exit(f"line {i}: adset_id is only supported for platform 'meta'")
     if r["dtc_overall"].strip().lower() == "true" and r["business_line"].strip() != "DTC":
         sys.exit(f"line {i}: dtc_overall=true requires business_line=DTC")
 
@@ -52,23 +79,36 @@ for r in rows:
 _lines = []
 for i, r in enumerate(rows):
     p_, cid = r["platform"].strip(), r["campaign_id"].strip()
+    adset = r.get("adset_id", "").strip()
+    # '' rather than NULL for a campaign-level row, deliberately. The join
+    # predicate `s.adset_id is null` against this UNION ALL makes Redshift's
+    # planner fail with a bare "Assert" -- it cannot plan IS NULL over a column
+    # that is a literal null in some branches. A sentinel keeps the predicate a
+    # plain equality, which plans fine. Same family of planner landmine as the
+    # one that forced the single full outer join in blended_performance.
+    aset_lit = f"'{adset}'" if adset else "''"
     seg = r["segment"].strip().replace("'", "''")
     bl, dtc = r["business_line"].strip(), r["dtc_overall"].strip().lower()
     if i == 0:
         _lines.append(
             f"        select '{p_}'::varchar(16)  as platform,\n"
             f"               '{cid}'::varchar(32) as campaign_id,\n"
+            f"               {aset_lit}::varchar(32) as adset_id,\n"
             f"               '{seg}'::varchar(64) as segment,\n"
             f"               '{bl}'::varchar(16)  as business_line,\n"
             f"               {dtc}::boolean       as dtc_overall"
         )
     else:
-        _lines.append(f"        union all select '{p_}', '{cid}', '{seg}', '{bl}', {dtc}")
+        _lines.append(
+            f"        union all select '{p_}', '{cid}', {aset_lit}, '{seg}', '{bl}', {dtc}")
 values = "\n".join(_lines)
 
 summary = "\n".join(
     f"      {seg:<20} {len(v)} campaign(s): "
-    + ", ".join(f"{x['platform']}:{x['campaign_id']}" for x in v)
+    + ", ".join(
+        f"{x['platform']}:{x['campaign_id']}"
+        + (f"/adset:{x['adset_id'].strip()}" if x.get('adset_id', '').strip() else '')
+        for x in v)
     for seg, v in sorted(by_seg.items())
 )
 

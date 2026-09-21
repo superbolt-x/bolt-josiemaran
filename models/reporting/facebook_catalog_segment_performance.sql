@@ -47,52 +47,87 @@
   1-day-view, which is worth being able to show separately.
 
   ── Coverage warning ─────────────────────────────────────────────────────────
-  Only campaigns inside the CPAS/catalog partnership emit these rows. As of
-  2026-09-07 the two legacy `obj:Purchase` collab campaigns still do; the new
-  `SB - US/CA - Sephora Prospecting … Traffic - Clicks` campaigns that replaced
-  the legacy traffic campaigns on ~2026-08-25 emit NOTHING, despite carrying
-  ~$12.1k of September spend. See the coverage test in blended.yml.
+  Only campaigns inside the CPAS/catalog partnership emit these rows. Every
+  Purchase-objective campaign does; every Traffic-objective one emits NOTHING,
+  for its entire life — that is how the objective works, not a broken linkage.
+  See the Collab-scoped coverage test in tests/.
+
+  ── ADSET grain, not campaign grain ──────────────────────────────────────────
+  Sourced from `ads_insights_catalog_segment_*` (ad grain, rolled to adset)
+  rather than `campaigns_insights_catalog_segment_*`. One campaign —
+  120250632750520303, "Sephora Collab - Purchase - Catch All" — holds a US
+  adset and a CA adset that belong to DIFFERENT report segments, so catalog
+  conversions have to be attributable per adset. A campaign-grain table cannot
+  express that split.
+
+  Verified equivalent before switching: rolled back up to campaign over
+  2026-09-01..20, the ad-grain tables match the campaign-grain ones EXACTLY —
+  zero difference on both purchases and add-to-cart, on every campaign — and
+  both carry identical history from 2025-03-24. Nothing historical moved.
 */
 
-with actions as (
+with ad_to_adset as (
+
+    /*  ad_id → (campaign_id, adset_id). The raw catalog tables are keyed by
+        ad_id only, so the adset has to come from the delivery table.
+        campaign_id/adset_id are bigint there and varchar here, hence the
+        casts — the two sides of this join disagree on type otherwise.       */
+    select
+        ad_id::varchar              as ad_id,
+        max(campaign_id::varchar)   as campaign_id,
+        max(adset_id::varchar)      as adset_id
+    from {{ source('reporting', 'josiemaran_facebook_performance_by_ad') }}
+    where date_granularity = 'day'
+      and ad_id is not null
+    group by 1
+
+),
+
+actions as (
 
     select
-        campaign_id,
-        date,
-        action_type,
-        sum(value)       as cnt,
-        sum(_7_d_click)  as cnt_7d_click,
-        sum(_1_d_view)   as cnt_1d_view
-    from {{ source('facebook_catalog_raw', 'campaigns_insights_catalog_segment_actions') }}
-    group by 1, 2, 3
+        m.campaign_id,
+        m.adset_id,
+        a.date,
+        a.action_type,
+        sum(a.value)       as cnt,
+        sum(a._7_d_click)  as cnt_7d_click,
+        sum(a._1_d_view)   as cnt_1d_view
+    from {{ source('facebook_catalog_raw', 'ads_insights_catalog_segment_actions') }} a
+    join ad_to_adset m on m.ad_id = a.ad_id::varchar
+    group by 1, 2, 3, 4
 
 ),
 
 values_ as (
 
     select
-        campaign_id,
-        date,
-        action_type,
-        sum(value)       as val,
-        sum(_7_d_click)  as val_7d_click,
-        sum(_1_d_view)   as val_1d_view
-    from {{ source('facebook_catalog_raw', 'campaigns_insights_catalog_segment_value') }}
-    group by 1, 2, 3
+        m.campaign_id,
+        m.adset_id,
+        v.date,
+        v.action_type,
+        sum(v.value)       as val,
+        sum(v._7_d_click)  as val_7d_click,
+        sum(v._1_d_view)   as val_1d_view
+    from {{ source('facebook_catalog_raw', 'ads_insights_catalog_segment_value') }} v
+    join ad_to_adset m on m.ad_id = v.ad_id::varchar
+    group by 1, 2, 3, 4
 
 ),
 
 joined as (
 
     select
-        coalesce(a.campaign_id, v.campaign_id) as campaign_id,
-        coalesce(a.date, v.date)               as date,
+        coalesce(a.campaign_id, v.campaign_id)  as campaign_id,
+        coalesce(a.adset_id, v.adset_id)        as adset_id,
+        coalesce(a.date, v.date)                as date,
         coalesce(a.action_type, v.action_type)  as action_type,
         a.cnt, a.cnt_7d_click, a.cnt_1d_view,
         v.val, v.val_7d_click, v.val_1d_view
     from actions a
     full outer join values_ v
         on  a.campaign_id = v.campaign_id
+        and a.adset_id    = v.adset_id
         and a.date        = v.date
         and a.action_type = v.action_type
 
@@ -102,6 +137,7 @@ pivoted as (
 
     select
         campaign_id,
+        adset_id,
         date,
 
         -- ── Headline: all channels (web + app + in store) ──────────────────
@@ -127,7 +163,7 @@ pivoted as (
         sum(case when action_type = 'omni_view_content' then val end)  as cs_view_content_value
 
     from joined
-    group by 1, 2
+    group by 1, 2, 3
 
 ),
 
@@ -145,6 +181,7 @@ spined as (
         g.date_granularity,
         {{ jm_period_start('p.date', 'g.date_granularity') }} as date,
         p.campaign_id,
+        p.adset_id,
         p.cs_purchases, p.cs_revenue,
         p.cs_purchases_7d_click, p.cs_purchases_1d_view,
         p.cs_revenue_7d_click, p.cs_revenue_1d_view,
@@ -160,6 +197,7 @@ spined as (
 
 select
     campaign_id,
+    adset_id,
     date,
     date_granularity,
     sum(cs_purchases)           as cs_purchases,
@@ -179,4 +217,4 @@ select
     sum(cs_view_content)        as cs_view_content,
     sum(cs_view_content_value)  as cs_view_content_value
 from spined
-group by 1, 2, 3
+group by 1, 2, 3, 4

@@ -29,8 +29,13 @@ sources:
       - name: josiemaran_shopify_daily_sales_by_order
       - name: josiemaran_facebook_performance_by_ad
         description: >
-          Ad grain. Used only for the adset_id → campaign_id lookup that GA4's
-          Meta sessions need. Verified unique: no adset maps to two campaigns.
+          Ad grain. Now the primary Meta delivery source (rolled to adset), not
+          just the adset_id → campaign_id lookup GA4's Meta sessions need —
+          segment mapping has to happen per adset since one campaign spans two
+          segments. Verified before switching: rolled up to campaign over
+          2026-09-01..20 it matches josiemaran_facebook_performance_by_campaign
+          to the cent on 7 of 8 campaigns, and differs by $0.27 on $14,905
+          (0.002%) on the eighth — a deleted ad. Identical history depth.
 
   # ── Raw Facebook catalog-segment insights ──────────────────────────────────
   # The Facebook package does not surface these, so they are declared here.
@@ -44,6 +49,28 @@ sources:
       sephora.com, so nothing lands in the Meta account's own purchase columns
       or in Shopify. Long/EAV: one row per entity × date × action_type.
     tables:
+      # AD grain, keyed by ad_id. Used instead of the campaign-grain pair
+      # below because one campaign (120250632750520303) holds a US adset and a
+      # CA adset belonging to different report segments, so catalog
+      # conversions have to be attributable per adset, not per campaign.
+      # Verified equivalent before switching: rolled up to campaign over
+      # 2026-09-01..20 these match the campaign-grain tables EXACTLY — zero
+      # difference on purchases and add-to-cart — and both carry identical
+      # history (from 2025-03-24), so nothing historical moves.
+      - name: ads_insights_catalog_segment_actions
+        description: "Conversion COUNTS by action_type, ad grain. Same nesting rule."
+        columns:
+          - name: action_type
+            description: >
+              Action types NEST — omni_purchase = fb_pixel_purchase +
+              offline_conversion.purchase + app_custom_event.fb_mobile_purchase,
+              and view_content is identical to omni_view_content. NEVER SUM
+              across action_type; always pivot named types.
+      - name: ads_insights_catalog_segment_value
+        description: "Conversion VALUES by action_type, ad grain. Same nesting rule."
+
+      # Campaign grain — superseded by the ad-grain pair above, kept declared
+      # because it is still the simplest cross-check when reconciling.
       - name: campaigns_insights_catalog_segment_actions
         description: "Conversion COUNTS by action_type."
         columns:
