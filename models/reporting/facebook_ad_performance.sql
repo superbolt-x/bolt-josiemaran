@@ -28,5 +28,15 @@ impressions,
 link_clicks,
 add_to_cart,
 purchases,
-revenue
+revenue,
+
+-- Attribution-window splits.
+purchases_7_d_click,
+revenue_7_d_click,
+purchases_1_d_view,
+revenue_1_d_view,
+
+-- Shared-item (collaborative ad / catalogue) credit.
+purchases_with_shared_items,
+revenue_with_shared_items
 FROM {{ ref('facebook_performance_by_ad') }}
