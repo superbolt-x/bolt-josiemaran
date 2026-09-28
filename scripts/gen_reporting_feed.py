@@ -65,6 +65,38 @@ LEVELS = [
              "    -- not everything in the DTC account. GA4 is attached by campaign id.",
     ),
     dict(
+        # Same report_level as dtc_segment on purpose — these are DTC slides,
+        # they just are not part of the rollup. A separate CTE rather than a
+        # widened filter on dtc_segment because one grouping set cannot roll up
+        # over a SUBSET while detailing a SUPERSET: widening that WHERE would
+        # silently pull these segments into 'Paid DTC Overall' too, which is
+        # exactly what this is here to avoid. Additive, so Paid DTC Overall,
+        # Meta Overall and Google Overall are provably untouched.
+        cte="dtc_segment_standalone", label="DTC Segment",
+        row_label="segment",
+        market="'All'",
+        is_rollup="0",
+        read_metrics="'paid_*'",
+        sums=["spend", "impressions", "clicks", "paid_purchases", "paid_revenue",
+              "ga4_sessions", "ga4_purchases", "ga4_revenue",
+              "site_orders", "site_first_orders", "site_new_customers", "site_gross_sales"],
+        # channel filter matters: GA4-only rows are stamped business_line 'DTC'
+        # with in_dtc_overall false, so without it 'Other' and 'Unattributed
+        # Paid' would leak in here as well as into their own ga4_channel level.
+        where="business_line = 'DTC'\n"
+              "      and in_dtc_overall = false\n"
+              "      and channel not in ('Shopify', 'GA4')",
+        group="segment, date",
+        having="sum(spend) > 0",
+        note="DTC segments that report on their own slide but are deliberately\n"
+             "    -- OUT of the Paid DTC Overall rollup. Today: TikTok Overall (GMV\n"
+             "    -- Max), whose revenue is TikTok Shop GMV — those orders are placed\n"
+             "    -- in TikTok Shop, never reach Shopify and never appear in GA4, so\n"
+             "    -- folding them into a rollup that otherwise means Shopify-attributed\n"
+             "    -- revenue would mix two order systems. Set dtc_overall = true in\n"
+             "    -- seeds/campaign_segments.csv to move a segment into the rollup.",
+    ),
+    dict(
         cte="sephora_segment", label="Sephora Segment",
         row_label="case when grouping(segment) = 1 and grouping(market) = 0\n"
                   "                  then 'Sephora – ' || market\n"

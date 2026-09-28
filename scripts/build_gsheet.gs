@@ -151,6 +151,35 @@ var SHAPES = {
     ],
     flag: FEEDBACK, flagStyle: 'amber'
   },
+  // TikTok GMV Max. Deliberately SHORT: TikTok reports no impressions and no
+  // clicks for this campaign type at any grain, so CPM, CTR, Clicks, CPC and
+  // CVR are not missing-for-now, they are not derivable. Reusing the `dtc`
+  // shape here would print five permanently blank rows on the slide, which
+  // reads as a broken report rather than as an honest one.
+  //
+  // `spend` is `cost`, the invoice-side figure. Revenue is TikTok SHOP GMV —
+  // these orders never reach Shopify, so this ROAS is not comparable to the
+  // Meta/Google ROAS above it. That is also why TikTok Overall is not in
+  // Paid DTC Overall; see seeds/campaign_segments.csv.
+  tiktokGmv: {
+    metrics: [
+      ['Spend',     'spend',          '$#,##0'],
+      ['Purchases', 'paid_purchases', '#,##0'],
+      ['CPA',       'paid_cpa',       '$#,##0.00'],
+      ['Revenue',   'paid_revenue',   '$#,##0'],
+      ['ROAS',      'paid_roas',      '0.00'],
+      ['AOV',       'paid_aov',       '$#,##0.00']
+    ],
+    chart: [['Spend', 'spend', '$#,##0'], ['ROAS', 'paid_roas', '0.00']],
+    summary: [
+      ['Spend',     'spend',          '$#,##0'],
+      ['Purchases', 'paid_purchases', '#,##0'],
+      ['Revenue',   'paid_revenue',   '$#,##0'],
+      ['ROAS',      'paid_roas',      '0.00'],
+      ['AOV',       'paid_aov',       '$#,##0.00']
+    ],
+    flag: VALID, flagStyle: 'grey'
+  },
   site: {
     metrics: [
       ['Orders',        'site_orders',        '#,##0'],
@@ -184,7 +213,10 @@ var SHAPES = {
 // rows come from order_type / a fixed GA4 residual split, not a seed — so
 // they keep an explicit `slides` array, same as before this existed.
 var TABS = {
-  'DTC WoW': { shape: 'dtc', grain: 'week', shapes: ['dtc'] },
+  // Two shapes: the Meta/Google/Overall slides plus TikTok GMV Max, whose
+  // metric set is a strict subset (no impressions or clicks are reported for
+  // it). Array order puts the three dtc slides ahead of TikTok.
+  'DTC WoW': { grain: 'week', shapes: ['dtc', 'tiktokGmv'] },
   'Sephora Traffic WoW': { shape: 'sephoraTraffic', grain: 'week', shapes: ['sephoraTraffic'] },
   'Sephora Collab WoW': { shape: 'sephoraCollab', grain: 'week', shapes: ['sephoraCollab'] },
   'Site': { shape: 'site', grain: 'week', slides: [
@@ -199,7 +231,7 @@ var TABS = {
   // KPI = one row, current MTD only (Spend/CTR/CVR/Revenue/ROAS/AOV — the deck's
   // "Full Funnel KPIs" slide). Chart = the same 4-week trend as every WoW tab:
   // mtd only ever holds one useful point, so there is no monthly trend to draw.
-  'MTD': { shape: 'dtc', grain: 'mtd', chartGrain: 'week', shapes: ['dtc'] },
+  'MTD': { grain: 'mtd', chartGrain: 'week', shapes: ['dtc', 'tiktokGmv'] },
   // Two shapes mixed in one tab (Traffic charts Spend/CPC, Collab charts
   // Spend/ROAS) — shapes is an ARRAY here, and loadSlideConfig_ groups by
   // shape-in-array-order first, sort_order within each shape second, which is
