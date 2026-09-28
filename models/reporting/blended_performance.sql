@@ -337,6 +337,95 @@ tiktok as (
 
 ),
 
+tiktok_gmv as (
+
+    /*  GMV Max — a second TikTok branch, not a second source for the one above.
+
+        These campaigns are invisible to every standard TikTok table: campaign
+        1876696959444129 has zero rows in campaign_report_daily,
+        campaign_history and adgroup_history. TikTok reports the type only
+        through its own gmv_* endpoints. Kept as its own CTE rather than folded
+        into `tiktok` because almost nothing about the two lines up — different
+        source, different grain, different revenue system, and a metric set
+        that is missing half the columns.
+
+        ⚠ `paid_revenue` here is TikTok SHOP GMV, not Shopify revenue. These
+        orders are placed in TikTok Shop and never reach Shopify, so
+        shopify_sales_by_segment cannot reconcile them and GA4 never sees the
+        sessions. It shares the paid_revenue column with Meta/Google because
+        the reporting shapes expect one revenue column, but a blended ROAS
+        across this and Shopify-attributed revenue is mixing two order systems.
+        That is why this campaign maps with dtc_overall = false in
+        campaign_segments.csv — see the note there.
+
+        `spend` is `cost`, the invoice-side number, per the reporting decision.
+        `net_cost` (cost after TikTok's ROI-protection rebates, which are
+        IN_EFFECT on this campaign) is deliberately NOT used here; it stays
+        available on tiktok_campaign_performance.net_spend for anyone who needs
+        the net view.
+
+        impressions and clicks are NULL, not 0 — TikTok does not report them
+        for GMV Max at any grain, so CPM/CTR/CPC/CVR are not derivable. NULL
+        keeps the campaign out of those averages instead of dragging a CPM
+        toward zero; 0 would quietly corrupt every blended delivery metric the
+        moment this campaign joined a rollup.
+
+        The feed is zero-padded back to 2025-09-25, a year before the campaign
+        existed, so the all-zero placeholder rows are filtered out. Rolled up
+        to all five granularities here because the source is day-grain only —
+        without that this campaign would appear in the daily view and vanish
+        from the weekly and monthly ones.                                    */
+
+    select
+        'TikTok'                    as channel,
+        'tiktok'                    as platform,
+        g.campaign_id::varchar      as campaign_id,
+        c.campaign_name,
+        cast(null as varchar(64))   as map_segment,
+        cast(null as varchar(16))   as map_business_line,
+        cast(null as boolean)       as map_dtc_overall,
+        g.date,
+        g.date_granularity,
+        g.spend,
+        cast(null as bigint)           as impressions,
+        cast(null as double precision) as clicks,
+        g.purchases                    as paid_purchases,
+        g.revenue                      as paid_revenue,
+        cast(null as bigint)           as paid_add_to_cart,
+        cast(null as double precision) as cs_purchases,
+        cast(null as double precision) as cs_revenue,
+        cast(null as double precision) as cs_offline_purchases,
+        cast(null as double precision) as cs_add_to_cart
+    from (
+        {%- for gr in ['day','week','month','quarter','year'] %}
+        select '{{ gr }}' as date_granularity, {{ gr }} as date, campaign_id,
+               sum(cost)          as spend,
+               sum(orders)        as purchases,
+               sum(gross_revenue) as revenue
+        from (
+            select campaign_id, {{ get_date_parts('stat_time_day::date') }},
+                   cost, orders, gross_revenue
+            from {{ source('tiktok_gmv_raw', 'gmv_campaign_report_daily') }}
+            where cost <> 0 or gross_revenue <> 0 or orders <> 0
+        )
+        group by 1, 2, 3
+        {%- if not loop.last %}
+        union all
+        {%- endif %}
+        {%- endfor %}
+    ) g
+    left join (
+        -- Versioned on updated_at: one row per edit, so dedupe before joining.
+        select campaign_id, campaign_name from (
+            select campaign_id, campaign_name,
+                   row_number() over (
+                       partition by campaign_id order by updated_at desc) as rn
+            from {{ source('tiktok_gmv_raw', 'gmv_max_campaign_history') }}
+        ) where rn = 1
+    ) c on c.campaign_id = g.campaign_id
+
+),
+
 -- ─── GA4 ────────────────────────────────────────────────────────────────────
 
 fb_adset_to_campaign as (
@@ -411,6 +500,7 @@ paid_union as (
     select * from meta
     union all select * from google
     union all select * from tiktok
+    union all select * from tiktok_gmv
 ),
 
 paid_ga4 as (

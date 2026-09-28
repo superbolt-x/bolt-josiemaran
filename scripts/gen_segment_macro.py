@@ -137,6 +137,16 @@ DEST.write_text(f"""{{#
   `Paid DTC Overall` is the rollup of every row with dtc_overall = true —
   the Meta Overall and Google Overall campaigns together.
 
+  TikTok Overall is business_line DTC but dtc_overall = FALSE, deliberately.
+  It is the GMV Max campaign, and its revenue is TikTok Shop GMV: those orders
+  are placed in TikTok Shop, never reach Shopify, and never appear in GA4. So
+  rolling it into `Paid DTC Overall` would put a second order system inside a
+  number that otherwise means Shopify-attributed revenue, and would step the
+  Paid DTC Overall trend line mid-quarter — the deck still prints that slide as
+  "Meta & Google (& Eventually TikTok)". It reports on its own slide instead.
+  Flipping this one cell to true is all that is needed when the client decides
+  the rollup should include it.
+
   Emitted as UNION ALL rather than VALUES: Redshift rejects VALUES as a table
   constructor inside a CTE. Explicit casts on the first row stop it sizing each
   varchar from the first literal and truncating the rest.
@@ -155,11 +165,12 @@ DEST.write_text(f"""{{#
     case
         when {{{{ segment }}}} like '%US%' then 'US'
         when {{{{ segment }}}} like '%CA%' then 'CA'
-        -- Kohl's and the two DTC rollups carry no region token in the segment
+        -- Kohl's and the DTC rollups carry no region token in the segment
         -- name. Sephora at Kohl's is a US retailer, and 19,552 of 19,636
-        -- Shopify orders (99.6%) ship to the US.
+        -- Shopify orders (99.6%) ship to the US. TikTok Overall is the GMV Max
+        -- campaign against the US TikTok Shop (store 7495649060905257667).
         when {{{{ segment }}}} in ('Meta Overall', 'Google Overall',
-                              'Sephora @ Kohls')                then 'US'
+                              'TikTok Overall', 'Sephora @ Kohls')  then 'US'
         else 'Unknown'
     end
 {{% endmacro %}}

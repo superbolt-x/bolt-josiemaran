@@ -225,6 +225,120 @@ dtc_segment as (
 
 ),
 
+dtc_segment_standalone as (
+
+    -- DTC segments that report on their own slide but are deliberately
+    -- OUT of the Paid DTC Overall rollup. Today: TikTok Overall (GMV
+    -- Max), whose revenue is TikTok Shop GMV — those orders are placed
+    -- in TikTok Shop, never reach Shopify and never appear in GA4, so
+    -- folding them into a rollup that otherwise means Shopify-attributed
+    -- revenue would mix two order systems. Set dtc_overall = true in
+    -- seeds/campaign_segments.csv to move a segment into the rollup.
+    select
+        'DTC Segment'                           as report_level,
+        segment                   as row_label,
+        'All'                                  as market,
+        'week'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        'paid_*' as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from wk
+    where business_line = 'DTC'
+      and in_dtc_overall = false
+      and channel not in ('Shopify', 'GA4')
+    group by segment, date
+    having sum(spend) > 0
+
+    union all
+
+    select
+        'DTC Segment'                           as report_level,
+        segment                   as row_label,
+        'All'                                  as market,
+        'month'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        'paid_*' as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from mo
+    where business_line = 'DTC'
+      and in_dtc_overall = false
+      and channel not in ('Shopify', 'GA4')
+    group by segment, date
+    having sum(spend) > 0
+
+    union all
+
+    select
+        'DTC Segment'                           as report_level,
+        segment                   as row_label,
+        'All'                                  as market,
+        'mtd'                                  as grain,
+        date                                    as period_start,
+        0                       as is_rollup,
+        'paid_*' as read_metrics,
+        sum(spend)                              as spend,
+        sum(impressions)                        as impressions,
+        sum(clicks)                             as clicks,
+        sum(paid_purchases)                     as paid_purchases,
+        sum(paid_revenue)                       as paid_revenue,
+        cast(null as double precision)          as cs_purchases,
+        cast(null as double precision)          as cs_revenue,
+        cast(null as double precision)          as cs_offline_purchases,
+        cast(null as double precision)          as cs_add_to_cart,
+        sum(ga4_sessions)                       as ga4_sessions,
+        sum(ga4_purchases)                      as ga4_purchases,
+        sum(ga4_revenue)                        as ga4_revenue,
+        sum(shopify_orders)                     as site_orders,
+        sum(shopify_first_orders)               as site_first_orders,
+        sum(shopify_new_customers)              as site_new_customers,
+        sum(shopify_gross_sales)                as site_gross_sales,
+        cast(null as varchar(8))                as status,
+        cast(null as varchar(256))              as detail
+    from md
+    where business_line = 'DTC'
+      and in_dtc_overall = false
+      and channel not in ('Shopify', 'GA4')
+    group by segment, date
+    having sum(spend) > 0
+
+),
+
 sephora_segment as (
 
     -- Meta AND TikTok. No ga4_* — GA4 measures josiemaran.com, and
@@ -802,10 +916,12 @@ slide_config as (
         union all select 'Sephora @ Kohls', 'sephoraTraffic', 3
         union all select 'Sephora US Collab', 'sephoraCollab', 1
         union all select 'Sephora CA Collab', 'sephoraCollab', 2
+        union all select 'TikTok Overall', 'tiktokGmv', 1
 ),
 
 unioned as (
     select * from dtc_segment
+    union all select * from dtc_segment_standalone
     union all select * from sephora_segment
     union all select * from campaign
     union all select * from ga4_channel

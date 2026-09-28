@@ -41,7 +41,7 @@ models:
       - name: segment
         description: >
           Assigned by CAMPAIGN ID from seeds/campaign_segments.csv, taken from
-          the reporting deck — not parsed from campaign names. Seven segments
+          the reporting deck — not parsed from campaign names. Eight segments
           plus 'Unmapped', 'Site', and the two GA4 residuals below. Traffic and
           Collab must never be summed.
         tests:
@@ -51,7 +51,12 @@ models:
               # paid-looking sessions whose campaign never resolved, and
               # everything non-paid (email, SMS, organic, direct, affiliate).
               # They exist so GA4 totals reconcile; they are never in a rollup.
-              values: ['Google Overall', 'Meta Overall', 'Sephora US Traffic',
+              # 'TikTok Overall' is the GMV Max campaign. business_line is
+              # DTC but in_dtc_overall is FALSE: its revenue is TikTok Shop
+              # GMV, a different order system from the Shopify revenue the
+              # rollup otherwise means. Reports on its own slide.
+              values: ['Google Overall', 'Meta Overall', 'TikTok Overall',
+                       'Sephora US Traffic',
                        'Sephora US Collab', 'Sephora CA Traffic',
                        'Sephora CA Collab', 'Sephora @ Kohls',
                        'Unmapped', 'Site',
