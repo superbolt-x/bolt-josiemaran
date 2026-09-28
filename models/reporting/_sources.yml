@@ -103,3 +103,41 @@ sources:
               campaign id, so it needs split_part + an adset→campaign lookup.
               1,438 of 1,456 distinct Meta values match `^[0-9]{15,20}_`, 13
               are bare adset ids, 5 are neither.
+
+  # ── TikTok GMV Max ──────────────────────────────────────────────────────────
+  # Named `tiktok_gmv_raw` rather than `tiktok_raw` to avoid colliding with the
+  # source the TikTok package already declares over the same schema — same
+  # reason `facebook_catalog_raw` is named the way it is.
+  #
+  # GMV Max campaigns appear in NO standard TikTok table: campaign
+  # 1876696959444129 has zero rows in campaign_report_daily, campaign_history
+  # and adgroup_history. TikTok reports them only through these endpoints.
+  - name: tiktok_gmv_raw
+    schema: tiktok_raw
+    description: >
+      TikTok GMV Max (TikTok Shop) campaign reporting. Separate API surface
+      from the standard campaign endpoints — the TikTok package's sources
+      never see these campaigns.
+    tables:
+      - name: gmv_campaign_report_daily
+        description: >
+          One row per campaign per day. Zero-padded back to 2025-09-25, a year
+          before the only campaign was created (2026-09-18) — 361 of 369 rows
+          are all-zero placeholders and must be filtered out.
+
+          No impressions and no clicks, here or in gmv_advertiser_report_daily.
+          CPM/CTR/CPC/CVR are therefore not derivable for GMV Max at all.
+        columns:
+          - name: gross_revenue
+            description: >
+              TikTok Shop GMV, not Shopify revenue. These orders never reach
+              Shopify, so shopify_sales_by_segment cannot reconcile them.
+          - name: net_cost
+            description: >
+              `cost` after TikTok ROI-protection rebates. The campaign carries
+              roi_protection_compensation_status = 'IN_EFFECT', so this
+              genuinely diverges from `cost` (2026-09-27: $115.18 vs $107.16).
+      - name: gmv_max_campaign_history
+        description: >
+          Campaign metadata, one row per version keyed on `updated_at` —
+          dedupe to the latest per campaign before joining.

@@ -131,3 +131,48 @@ models:
           In-store purchases. 62% of US Traffic's conversions vs 7% of US
           Collab's — traffic drives footfall, collab drives sephora.com.
 
+
+  - name: tiktok_campaign_performance
+    description: >
+      Campaign-grain TikTok: standard campaigns unioned with GMV Max, which
+      TikTok reports through a completely separate API surface and which no
+      standard TikTok table contains. GMV Max rows carry NULL impressions and
+      clicks because those metrics are not reported for the type at any grain,
+      and their `revenue` is TikTok Shop GMV, which never reaches Shopify.
+    tests:
+      # The union is the whole risk in this model: one campaign appearing in
+      # both branches, or the GMV history table fanning out on its versions,
+      # would silently double spend. This is the test that would catch it.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - campaign_id
+            - date
+            - date_granularity
+    columns:
+      - name: campaign_id
+        tests: [not_null]
+      - name: date
+        tests: [not_null]
+      - name: date_granularity
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['day', 'week', 'month', 'quarter', 'year']
+      - name: campaign_source
+        description: >
+          'standard' or 'gmv_max'. Lets consumers exclude GMV Max rather than
+          being forced to take them — they are not comparable to standard rows
+          on delivery metrics or on revenue definition.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['standard', 'gmv_max']
+      - name: revenue
+        description: >
+          Standard rows: total_purchase_value (zero across all history so far).
+          GMV Max rows: TikTok Shop gross_revenue, real dollars. Do not compare
+          the two without saying which is which.
+      - name: net_spend
+        description: >
+          GMV Max only — `cost` after TikTok ROI-protection rebates. NULL for
+          standard campaigns, which have no such concept.
