@@ -294,3 +294,98 @@ CLI checks for that explicitly rather than trusting the HTTP status alone.
 it from their Google Account → Security → Third-party access, independent of
 rotating anything else. That kills `tokens.json`'s refresh token immediately;
 getting it working again means redoing the manual consent flow from scratch.
+
+
+---
+
+# Budget Pacing & DoD Budgets
+
+Two Gsheet tabs, four stacked-column charts each (Sephora US, CA, @ Kohl's, DTC):
+
+- **Budget Pacing** — the month in progress. Past days are grey (actual spend),
+  remaining days are colour (the client's forecast budget). Above each chart: the
+  "spent X% of the monthly budget through Y% of the month" headline.
+- **DoD Budgets** — the client's planned spend per day for a month, all in colour.
+  Shows next month once it is budgeted, else the current one.
+
+Data path: client budget sheet → `budget_forecast_to_redshift.py` (cron, 09:00 UTC,
+lives in `josiemaran/` beside this repo) → `gsheet_raw.josie_maran_budget_forecast`
+→ dbt `budget_pacing` (budget beside actual spend from `blended_performance`) →
+Metabase card → feed tab → `build_pacing_tabs.gs` draws the charts.
+
+## Deploying
+
+**1. dbt.** `budget_pacing` reads `blended_performance`, so build in that order.
+
+```bash
+dbt run  --select budget_pacing
+dbt test --select budget_pacing assert_budget_lines_mapped assert_budget_pacing_spend_ties_to_blended
+```
+
+`assert_budget_pacing_spend_ties_to_blended` proves the campaign → budget-line join
+neither drops nor duplicates spend. If it fails, do not ship the charts.
+
+**2. Metabase question.** New native question **JM – Budget Pacing**, same collection
+as the feed (4503). Until `dbt run` has built the table, paste
+`metabase/generated/02_budget_pacing_standalone.sql`; afterwards switch it to
+`metabase/02_budget_pacing.sql` and delete the generated file. Note the question id.
+No template tags — which month shows is decided in the sheet.
+
+**3. Apps Script.** In the existing project add a **second file** and paste
+`scripts/build_pacing_tabs.gs`. Set `PACING_CARD_ID` at the top to the question id.
+(Left at `0` the new tabs are simply skipped and the existing report is unaffected.)
+Run `refreshAndRebuild`; the daily trigger already calls it. If you pull the card
+with the Metabase extension instead, name its tab `budget pacing @ <id>`.
+
+**4. Look at it once.** `scripts/test_pacing_tabs.py` runs the script in V8 against a
+mock Sheets API, but it cannot show how Google draws the chart. On the first run check:
+the bars are **stacked**; the legend lists only the coloured entries (the grey
+"(actual)" series are meant to be hidden — Apps Script's `visibleInLegend` series
+option has not been confirmed in the real sheet, and if the legend shows both, build
+these two tabs through the Sheets API instead); the day labels are discrete (`9/1`,
+`9/2`…), not a continuous date axis.
+
+## Using it
+
+- **Month override** (cell B2 of either tab): type a month, e.g. `2026-09-01`, to look
+  at another one. Blank follows the data. An unknown month is ignored, and says so.
+- **Budget override** (the "Budget override" cell in each pacing block): the monthly
+  budget defaults to the **sum of the daily budgets**. Type a figure to quote a
+  nominal one instead (e.g. `95000`). It survives rebuilds. Do not use the client
+  sheet's own "Total Budget" row — it leaves out NB PMax, so it understates DTC.
+- **Actuals through** (row 2): how far the actuals really go. If it is not yesterday,
+  the feed is stale or a platform is late; days past it show as forecast, never as $0.
+
+## Adding a campaign
+
+A budget line is one row of the client's budget sheet. Two things must know about a
+new one — the loader (so it is read) and this mapping (so it is drawn):
+
+```bash
+# 1. budget_forecast_to_redshift.py: add the line to CAMPAIGN_DEFS (the loader alerts
+#    #data-script-errors and refuses the tab until you do)
+# 2. here: add a row to seeds/budget_campaign_map.csv. campaign_key must equal the
+#    loader's key; platform + campaign_id say which spend belongs to it; colours and
+#    stack_order say how it is drawn. A line with no live campaign yet can have a blank
+#    campaign_id (TikTok Web did, before it launched).
+python3 scripts/gen_budget_map_macro.py
+python3 scripts/build_pacing_card.py
+dbt run --select budget_pacing
+```
+
+If a budget line reaches the table without a mapping row, `assert_budget_lines_mapped`
+fails — the chart would otherwise draw it with no colour and no label.
+
+`seeds/budget_campaign_map.csv` is **not** `campaign_segments.csv`. Segments are the
+client's reporting definition; mapping Lead Gen there would have moved $838 of
+September spend into "Meta Overall" and "Paid DTC Overall" and changed numbers the
+client already received.
+
+## Known limits
+
+- **Sale labels and the numbered markers** on the doc's October charts (Prime Day,
+  Free Shipping, ①②③) are drawn by hand and are not part of these charts.
+- **A stale feed** shows older numbers until the next refresh; "Actuals through" is the
+  tell. A failed pacing refresh is toasted but does not stop the rest of the report.
+- **Platform freshness is per platform.** A platform that syncs late shows forecast
+  colour for the days it is missing while the others show grey.
