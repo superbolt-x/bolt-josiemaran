@@ -38,12 +38,16 @@
   cent; Meta and Google within a few dollars a day; the larger gaps (Kohl's on
   9/9 and 9/23) were gaps in the hand-pasted numbers, not in the warehouse.
 
-  ── A day is "actual" per PLATFORM, not per calendar ────────────────────────
-  A platform's actuals run through the EARLIER of its most recent synced day
-  and yesterday in the business timezone. Google was once 8 days behind the
-  others; a single "yesterday" cut-off would have drawn those days as zero
-  spend. Per platform, they stay forecast until the data is there. Today is
-  never actual — it is still filling.
+  ── A day is "actual" per PLATFORM, and only once it is COMPLETE ────────────
+  A platform's latest synced day is usually still filling, and it is drawn as a
+  finished grey bar if treated as actual. Checked 2026-10-07: Sephora US for
+  10/6 read $1,705 early in the morning and $2,375 once the rebuild caught up,
+  while every earlier day moved by cents. A day is complete once the platform has
+  synced a LATER day, because that proves a sync happened after it ended. So a
+  platform's actuals run through the EARLIER of the day before its latest synced
+  day and yesterday in the business timezone. That is no blanket one-day lag: when
+  the data is final the two agree. Google was once 8 days behind the others; per
+  platform, its days stay forecast until the data is there. Today is never actual.
 
   ── Campaign → budget line ──────────────────────────────────────────────────
   jm_budget_campaigns() maps campaign_id to a budget line (generated from
@@ -104,12 +108,14 @@ spend_daily as (
 
 freshness as (
 
-    -- Last day each platform has synced, capped at yesterday. Taken over EVERY
-    -- campaign on the platform, not just the mapped ones, so a paused campaign
-    -- with no rows cannot make the platform look stale.
+    -- The last COMPLETE day per platform: the day before its latest synced day,
+    -- capped at yesterday. Taken over EVERY campaign on the platform, not just
+    -- the mapped ones, so a paused campaign with no rows cannot make the platform
+    -- look stale. If a whole platform stops spending, this stalls one day behind
+    -- its last spend day, and the days after that stay forecast instead of 0.
     select
         platform,
-        least(max(date), (select today_local from today) - 1) as actuals_through
+        least(max(date) - 1, (select today_local from today) - 1) as actuals_through
     from spend_daily
     group by 1
 

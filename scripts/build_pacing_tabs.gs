@@ -23,14 +23,20 @@
  * seeds/budget_campaign_map.csv, so a new campaign needs a CSV line and no edit
  * here.
  *
- * ── WHY EACH CAMPAIGN IS TWO COLUMNS ────────────────────────────────────────
+ * ── ACTUAL IS ONE GREY SERIES, FORECAST IS ONE SERIES PER CAMPAIGN ──────────
  * A Sheets chart cannot colour a bar by whether its day is in the past. The old
  * hand-built charts set grey on each day by hand (28 per-point overrides), which
- * is exactly what cannot be automated: the grey days shift every day. Instead
- * every campaign gets an "actual" column and a "forecast" column, each with a
- * fixed colour, and a day lands in one or the other. On any given day only one
- * of the pair holds a value, so the stack is unchanged. The actual columns are
- * hidden from the legend, so it reads like the doc's.
+ * is exactly what cannot be automated: the grey days shift every day. So a day's
+ * value lands in one of two kinds of column: a single "Actual spend" series (the
+ * sum across campaigns, grey) for days that are over, or the campaign's own
+ * coloured forecast series for the days still to come.
+ *
+ * It was tried per campaign first (an actual twin for every forecast series, the
+ * twins hidden from the legend with the visibleInLegend series option). Google
+ * ignores that option on a Sheets chart, so the legend listed every twin: 18
+ * entries across four rows on DTC. One grey series keeps the legend to the
+ * campaigns plus one entry. What is lost is the per-campaign split of the days
+ * that are over; the doc's greys had no legend, so they could not be decoded.
  *
  * ── WHAT IS DELIBERATELY NOT HERE ───────────────────────────────────────────
  *  - Chart titles carry no month. A title is a chart's identity: this file edits
@@ -73,8 +79,10 @@ var PACING_BLOCK_ROWS      = 38;   // title, 2 stats rows, headline, header, 31 
 var PACING_MAX_DAYS        = 31;
 var PACING_CHART           = { width: 780, height: 340 };
 var PACING_NOTE_COLOR      = '#66756f';
+var PACING_ACTUAL_LABEL    = 'Actual spend';
+var PACING_ACTUAL_COLOR    = '#999999';
 var PACING_REQUIRED_COLS   = ['date', 'month_start', 'business_unit', 'platform', 'campaign_key',
-                              'legend_label', 'stack_order', 'forecast_color', 'actual_color',
+                              'legend_label', 'stack_order', 'forecast_color',
                               'forecast_budget', 'actual_spend', 'is_actual'];
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -120,7 +128,6 @@ function pacingParseFeed_(values, tz) {
       label:          String(row[idx.legend_label] || ''),
       order:          pacingNum_(row[idx.stack_order]),
       forecastColor:  String(row[idx.forecast_color] || ''),
-      actualColor:    String(row[idx.actual_color] || ''),
       forecast:       pacingNum_(row[idx.forecast_budget]),
       actual:         pacingNum_(row[idx.actual_spend]),
       isActual:       Number(row[idx.is_actual]) === 1
@@ -192,8 +199,9 @@ function pacingPickMonths_(rows, overrideIso) {
 
 /**
  * One business unit, one month -> everything the sheet and the chart need.
- *   columns  the chart series, in stack order. pacing mode gives every campaign
- *            an actual column then a forecast column; budget mode just forecast.
+ *   columns  the chart series, in stack order. pacing mode starts with ONE grey
+ *            "Actual spend" column (the sum across campaigns) when any day is over,
+ *            then a forecast column per campaign; budget mode is just the forecasts.
  *   matrix   one row per day of the month: [label, ...one value per column]
  *   stats    spent / planned / last actual day / days elapsed
  * A series that is zero all month is dropped, so a line the client has not
@@ -202,19 +210,20 @@ function pacingPickMonths_(rows, overrideIso) {
 function pacingUnitModel_(rows, unitKey, monthIso, mode) {
   var mine = rows.filter(function (r) { return r.unit === unitKey && r.monthStart === monthIso; });
   var days = pacingDays_(monthIso);
-  var byId = {}, cell = {};
+  var byId = {}, cell = {}, actualByDay = {};
   var stats = { spent: 0, planned: 0, lastActual: '', elapsedDays: 0, daysInMonth: days.length };
 
   mine.forEach(function (r) {
     var id = r.platform + '|' + r.key;
     var s = byId[id] || (byId[id] = {
       id: id, label: r.label || r.key, order: r.order === null ? 999 : r.order,
-      forecastColor: r.forecastColor || '#999999', actualColor: r.actualColor || '#666666', mass: 0 });
+      forecastColor: r.forecastColor || '#999999', mass: 0 });
     s.mass += Math.abs(r.forecast || 0) + Math.abs(r.actual || 0);
     cell[r.date + '|' + id] = r;
     if (r.forecast !== null) stats.planned += r.forecast;
     if (r.isActual && r.actual !== null) {
       stats.spent += r.actual;
+      actualByDay[r.date] = (actualByDay[r.date] || 0) + r.actual;
       if (r.date > stats.lastActual) stats.lastActual = r.date;
     }
   });
@@ -225,10 +234,10 @@ function pacingUnitModel_(rows, unitKey, monthIso, mode) {
     .sort(function (a, b) { return a.order - b.order || (a.id < b.id ? -1 : 1); });
 
   var columns = [];
+  if (mode === 'pacing' && stats.lastActual) {
+    columns.push({ id: '__actual__', kind: 'actual', header: PACING_ACTUAL_LABEL, color: PACING_ACTUAL_COLOR });
+  }
   series.forEach(function (s) {
-    if (mode === 'pacing') {
-      columns.push({ id: s.id, kind: 'actual',   header: s.label + ' (actual)', color: s.actualColor });
-    }
     columns.push({ id: s.id, kind: 'forecast', header: s.label, color: s.forecastColor });
   });
 
@@ -236,10 +245,10 @@ function pacingUnitModel_(rows, unitKey, monthIso, mode) {
     var line = [pacingLabel_(d)];
     columns.forEach(function (c) {
       var r = cell[d + '|' + c.id], v = '';
-      if (r) {
-        if (c.kind === 'actual') {
-          v = (r.isActual && r.actual !== null) ? r.actual : '';
-        } else if (mode === 'pacing') {
+      if (c.kind === 'actual') {
+        v = actualByDay[d] !== undefined ? actualByDay[d] : '';   // blank, not 0, on a forecast day
+      } else if (r) {
+        if (mode === 'pacing') {
           v = (!r.isActual && r.forecast !== null) ? r.forecast : '';
         } else {
           v = r.forecast !== null ? r.forecast : '';
@@ -258,7 +267,7 @@ function pacingUnitModel_(rows, unitKey, monthIso, mode) {
 function pacingChartOptions_(model, title, mode) {
   var series = {};
   model.columns.forEach(function (c, i) {
-    series[i] = { color: c.color, visibleInLegend: !(mode === 'pacing' && c.kind === 'actual') };
+    series[i] = { color: c.color };
   });
   return { title: title, series: series, legend: { position: 'top' },
            vAxis: { format: '$#,##0' }, width: PACING_CHART.width, height: PACING_CHART.height };
@@ -395,7 +404,9 @@ function writePacingBlock_(sh, top, unit, model, cfg, overrideValue) {
   // continuous time axis with thin bars, where the doc's charts are discrete.
   sh.getRange(headerRow + 1, 1, model.matrix.length, 1).setNumberFormat('@');
   sh.getRange(headerRow + 1, 1, model.matrix.length, nCols).setValues(model.matrix);
-  sh.getRange(headerRow + 1, 2, model.matrix.length, nCols - 1).setNumberFormat('$#,##0.00');
+  // The axis labels follow the CELLS' number format (the vAxis option is ignored), so
+  // no decimals here, or the axis reads $5,000.00 where the doc has $4,000.
+  sh.getRange(headerRow + 1, 2, model.matrix.length, nCols - 1).setNumberFormat('$#,##0');
 }
 
 function upsertPacingChart_(sh, top, model, title, mode) {

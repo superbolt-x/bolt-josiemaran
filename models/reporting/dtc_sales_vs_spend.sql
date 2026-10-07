@@ -46,10 +46,13 @@
     brand        Google US PMax Branded, US Branded Search, CA Branded Search
     nonbrand     Google NB PMax
 
-  ── Actuals per platform ────────────────────────────────────────────────────
-  Same rule as budget_pacing: a platform's spend counts through the EARLIER of its
-  most recent synced day and yesterday in the business timezone. A late platform
-  therefore leaves a gap, never a $0.
+  ── Complete days only ──────────────────────────────────────────────────────
+  Same rule as budget_pacing. A platform's latest synced day is usually still
+  filling, so spend counts through the EARLIER of the day before its latest synced
+  day and yesterday in the business timezone: a later day existing proves a sync
+  happened after it ended. A late platform therefore leaves a gap, never a $0.
+  Shopify gets the same rule on its own latest day, so the day count and the spend
+  always describe the same days.
 
   Spend history is read from blended_performance, so it goes as far back as
   Shopify's does here; the Gsheet only draws the current month.
@@ -66,6 +69,16 @@ today as (
 
 ),
 
+shopify_through as (
+
+    -- Last COMPLETE Shopify day, by the same rule as spend below.
+    select
+        least(max(date) - 1, (select today_local from today) - 1) as through_date
+    from {{ ref('shopify_sales_by_segment') }}
+    where date_granularity = 'day'
+
+),
+
 shopify_daily as (
 
     select
@@ -76,7 +89,7 @@ shopify_daily as (
         sum(new_customers)              as new_customers
     from {{ ref('shopify_sales_by_segment') }}
     where date_granularity = 'day'
-      and date <= (select today_local from today) - 1
+      and date <= (select through_date from shopify_through)
     group by 1
 
 ),
@@ -99,11 +112,12 @@ spend_rows as (
 
 freshness as (
 
-    -- Last day each platform has synced, capped at yesterday, taken over EVERY
-    -- campaign on the platform so a paused campaign cannot make it look stale.
+    -- The last COMPLETE day per platform: the day before its latest synced day,
+    -- capped at yesterday, taken over EVERY campaign on the platform so a paused
+    -- campaign cannot make it look stale.
     select
         platform,
-        least(max(date), (select today_local from today) - 1) as actuals_through
+        least(max(date) - 1, (select today_local from today) - 1) as actuals_through
     from spend_rows
     group by 1
 

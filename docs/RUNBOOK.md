@@ -341,12 +341,23 @@ name its tab `budget pacing @ <id>`. If the API Executable deployment is in use,
 version after pasting, or the execution-only grant will keep running the old code.
 
 **4. Look at it once.** `scripts/test_sheet_tabs.py` runs the script in V8 against a
-mock Sheets API, but it cannot show how Google draws the chart. On the first run check:
-the bars are **stacked**; the legend lists only the coloured entries (the grey
-"(actual)" series are meant to be hidden — Apps Script's `visibleInLegend` series
-option has not been confirmed in the real sheet, and if the legend shows both, build
-these two tabs through the Sheets API instead); the day labels are discrete (`9/1`,
-`9/2`…), not a continuous date axis.
+mock Sheets API, but it cannot show how Google draws the chart. To see the real thing
+without opening the sheet, export a tab as a PDF and render it (the Drive export of a
+single `gid` works with the service account); that is how the points below were found.
+Checked in the real sheet on 2026-10-07: the bars are **stacked**, the day labels are
+discrete (`10/1`, `10/2`…), the colours match the doc, and a chart edited in place on the
+daily run keeps its ID and stays stacked.
+
+**Why "Actual spend" is one grey series.** The first design gave every campaign a grey
+"actual" twin and hid the twins from the legend with the `visibleInLegend` series option.
+**Google ignores that option on a Sheets chart**: the legend listed all of them, 18 entries
+across four rows on DTC. So the past days are one grey "Actual spend" series (the sum across
+campaigns) and the legend is the campaigns plus that one entry (10 on DTC). The cost is that
+the per-campaign split of past days is gone; the doc's greys had no legend, so they could not
+be decoded. `actual_color` is still in the card and the seed but no longer used by the sheet.
+
+**Axis labels follow the cells' number format**, not the chart's `vAxis.format` option, so the
+data cells are formatted `$#,##0` (not `$#,##0.00`), or the axis reads `$5,000.00`.
 
 ## Using it
 
@@ -356,8 +367,11 @@ these two tabs through the Sheets API instead); the day labels are discrete (`9/
   budget defaults to the **sum of the daily budgets**. Type a figure to quote a
   nominal one instead (e.g. `95000`). It survives rebuilds. Do not use the client
   sheet's own "Total Budget" row — it leaves out NB PMax, so it understates DTC.
-- **Actuals through** (row 2): how far the actuals really go. If it is not yesterday,
-  the feed is stale or a platform is late; days past it show as forecast, never as $0.
+- **Actuals through** (row 2): how far the actuals really go. A day counts as actual only
+  once it is **complete**, meaning the platform has synced a *later* day (that proves a sync
+  happened after it ended). So early in the morning, before the first post-midnight sync
+  lands, it can be two days back; that is correct, not a fault. If it is further behind, the
+  feed is stale or a platform is late. Days past it show as forecast, never as $0.
 
 ## Adding a campaign
 
@@ -394,6 +408,13 @@ client already received.
   tell. A failed pacing refresh is toasted but does not stop the rest of the report.
 - **Platform freshness is per platform.** A platform that syncs late shows forecast
   colour for the days it is missing while the others show grey.
+- **Why a day must be complete to count.** A platform's latest synced day is usually still
+  filling. Checked 2026-10-07: Sephora US for 10/6 read $1,705 early in the morning and $2,375
+  once the rebuild caught up, while every earlier day moved by cents. Drawing that as a finished
+  grey bar understated both the bar and the "% of budget spent" headline. The rule (the day
+  before the platform's latest synced day, capped at yesterday) was checked by hiding today's
+  rows and confirming it stops one day earlier. If a platform stops spending entirely, it
+  stalls one day behind its last spend day and the days after stay forecast, not $0.
 
 
 ---

@@ -161,25 +161,43 @@ class PacingTabs(unittest.TestCase):
         m = self.js(f"pacingPickMonths_({json.dumps(both)}, '')")
         self.assertEqual((m["pacing"], m["budget"]), ("2026-09-01", "2026-10-01"))
 
-    def test_pacing_columns_pair_actual_and_forecast_in_stack_order(self):
+    def test_pacing_has_one_grey_actual_series_then_a_forecast_series_per_campaign(self):
         rows = self.js(f"pacingParseFeed_({json.dumps([COLS] + feed_rows(28))}, 'UTC')")
         m = self.js(f"pacingUnitModel_({json.dumps(rows)}, 'sephora_us', '2026-09-01', 'pacing')")
         heads = [c["header"] for c in m["columns"]]
-        self.assertEqual(heads, ["Meta US Traffic (actual)", "Meta US Traffic",
-                                 "Meta US Collab (actual)", "Meta US Collab",
-                                 "TikTok US Traffic (actual)", "TikTok US Traffic"])  # New US Collab is all zero: dropped
+        self.assertEqual(heads, ["Actual spend", "Meta US Traffic", "Meta US Collab",
+                                 "TikTok US Traffic"])         # New US Collab is all zero: dropped
         self.assertEqual(len(m["matrix"]), 30)
-        # day 1 is an actual day: the actual cell holds the value, the forecast cell is blank
-        self.assertEqual(m["matrix"][0][:3], ["9/1", 1801.0, ""])
-        # day 29 is a forecast day: the reverse
-        self.assertEqual(m["matrix"][28][:3], ["9/29", "", 1800.0])
+        # day 1 is over: ONE actual cell holding the sum across campaigns, forecasts blank
+        self.assertEqual(m["matrix"][0], ["9/1", (1800 + 1) + (250 + 1) + (600 + 1), "", "", ""])
+        # day 29 is still forecast: the reverse, one value per campaign, actual blank (not 0)
+        self.assertEqual(m["matrix"][28], ["9/29", "", 1800.0, 250.0, 600.0])
 
-    def test_only_one_of_each_actual_forecast_pair_is_ever_filled(self):
+    def test_no_actual_column_at_all_when_no_day_is_over_yet(self):
+        rows = self.js(f"pacingParseFeed_({json.dumps([COLS] + feed_rows(0))}, 'UTC')")
+        m = self.js(f"pacingUnitModel_({json.dumps(rows)}, 'sephora_us', '2026-09-01', 'pacing')")
+        self.assertNotIn("Actual spend", [c["header"] for c in m["columns"]])
+
+    def test_a_day_can_be_part_actual_part_forecast_when_platforms_cross_over(self):
+        """Google behind Meta: on the crossover day the grey is Meta's actual and Google stays forecast."""
+        rows = feed_rows(10)
+        for r in rows:                                   # make TikTok lag: its day 10 is still forecast
+            if r[3] == "tiktok" and r[0].endswith("-10"):
+                r[10], r[11] = "", 0
+        parsed = self.js(f"pacingParseFeed_({json.dumps([COLS] + rows)}, 'UTC')")
+        m = self.js(f"pacingUnitModel_({json.dumps(parsed)}, 'sephora_us', '2026-09-01', 'pacing')")
+        day10 = m["matrix"][9]
+        self.assertEqual(day10[0], "9/10")
+        self.assertEqual(day10[1], (1800 + 10) + (250 + 10))        # only the platforms that are over
+        self.assertEqual(day10[4], 600.0)                           # TikTok still shows its forecast
+
+    def test_a_day_is_either_actual_or_forecast_when_the_cutover_is_uniform(self):
         rows = self.js(f"pacingParseFeed_({json.dumps([COLS] + feed_rows(10))}, 'UTC')")
         m = self.js(f"pacingUnitModel_({json.dumps(rows)}, 'sephora_us', '2026-09-01', 'pacing')")
         for line in m["matrix"]:
-            for i in range(1, len(line), 2):
-                self.assertFalse(line[i] != "" and line[i + 1] != "", line)
+            actual, forecasts = line[1], line[2:]
+            self.assertFalse(actual != "" and any(v != "" for v in forecasts), line)
+            self.assertTrue(actual != "" or any(v != "" for v in forecasts), line)   # never an empty day
 
     def test_stats_match_hand_calculation(self):
         rows = self.js(f"pacingParseFeed_({json.dumps([COLS] + feed_rows(28))}, 'UTC')")
@@ -208,16 +226,16 @@ class PacingTabs(unittest.TestCase):
         for tab in ("Budget Pacing", "DoD Budgets"):
             self.assertEqual(self.js(f"{s}.sheets['{tab}'].charts.length"), 1, tab)  # only sephora_us has rows
 
-    def test_chart_series_colours_and_legend_visibility(self):
+    def test_chart_series_colours(self):
         s = self.build(feed_rows(28))
         ch = self.js(f"{s}.sheets['Budget Pacing'].charts[0]")
         self.assertEqual(ch["opts"]["title"], "Sephora US — Budget Pacing")     # no month: stable identity
         ser = ch["opts"]["series"]
-        self.assertEqual(len(ser), 6)
-        self.assertEqual([ser[str(i)]["color"] for i in range(6)],
-                         ["#B7B7B7", "#A4C2F4", "#999999", "#3C78D8", "#434343", "#FF9900"])
-        self.assertEqual([ser[str(i)]["visibleInLegend"] for i in range(6)],
-                         [False, True, False, True, False, True])
+        self.assertEqual(len(ser), 4)                       # one grey actual + three campaigns, so a short legend
+        self.assertEqual([ser[str(i)]["color"] for i in range(4)],
+                         ["#999999", "#A4C2F4", "#3C78D8", "#FF9900"])
+        # Sheets ignores visibleInLegend, so it must not be relied on (or set)
+        self.assertTrue(all("visibleInLegend" not in v for v in ser.values()))
         self.assertTrue(ch["stacked"])
         self.assertTrue(ch["opts"]["isStacked"])
 
@@ -229,6 +247,7 @@ class PacingTabs(unittest.TestCase):
         self.assertEqual(cells[f"{top + 2},4"]["f"], f"=IF(ISNUMBER(C{top + 2}),C{top + 2},B{top + 2})")
         self.assertEqual(cells[f"{top + 2},6"]["v"], 28)
         self.assertEqual(cells[f"{top + 5},1"]["nf"], "@")      # day labels stay text -> discrete axis
+        self.assertEqual(cells[f"{top + 5},2"]["nf"], "$#,##0")   # no decimals: the axis follows the cell format
 
     def test_rebuild_edits_charts_in_place_and_keeps_typed_overrides(self):
         s = self.build(feed_rows(28))
