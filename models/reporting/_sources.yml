@@ -141,3 +141,36 @@ sources:
         description: >
           Campaign metadata, one row per version keyed on `updated_at` —
           dedupe to the latest per campaign before joining.
+
+  # ── Client daily budgets ────────────────────────────────────────────────────
+  # NOT a Fivetran connector. budget_forecast_to_redshift.py (outside this repo,
+  # josiemaran/ next to it) reads the client's "[EXT] Josie Maran 2026 Budgets"
+  # sheet and loads one table, delete-and-insert per month tab, daily by cron.
+  # Named `gsheet_budget_raw` rather than `gsheet_raw` so it can never collide
+  # with a source a Fivetran Google Sheets connector might declare over the same
+  # schema later — same reason `facebook_catalog_raw` and `tiktok_gmv_raw` are
+  # named the way they are.
+  - name: gsheet_budget_raw
+    schema: gsheet_raw
+    description: >
+      Daily budget forecast by campaign, as planned in the client's budget
+      sheet. Latest state only — forecast history is not kept.
+    tables:
+      - name: josie_maran_budget_forecast
+        description: >
+          One row per date × business_unit × platform × campaign_key. `budget`
+          is the campaign's own daily total, so SUM(budget) never double counts;
+          Sephora campaigns the sheet splits into Boosted / Evergreen carry the
+          split in boosted_budget / evergreen_budget (NULL where there is none).
+          Do not use the sheet's own 'Total Budget' row: it leaves out NB PMax.
+        columns:
+          - name: business_unit
+            description: dtc | sephora_us | sephora_ca | sephora_kohls
+          - name: platform
+            description: meta | google | tiktok
+          - name: campaign_key
+            description: >
+              Stable snake_case key for a budget line, e.g. prospecting_advplus,
+              us_traffic. Not unique on its own: us_traffic exists under both
+              meta and tiktok in Sephora US, so the key is
+              (business_unit, platform, campaign_key).

@@ -1,0 +1,57 @@
+version: 2
+
+models:
+
+  - name: budget_pacing
+    description: >
+      The client's daily budget beside actual spend, one row per
+      date × business_unit × platform × campaign_key. Feeds the Gsheet pacing
+      and daily-budget charts. Actual spend is NULL (not 0) on days that are not
+      over or not yet synced; is_actual says which. Actuals come from
+      blended_performance, budgets from gsheet_raw.josie_maran_budget_forecast.
+    tests:
+      # One row per budget line per day. A fan-out here (a campaign matching two
+      # mapping rows) would double-count spend, and the chart would simply show
+      # a taller bar with no error anywhere.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - business_unit
+            - platform
+            - campaign_key
+    columns:
+      - name: date
+        tests: [not_null]
+      - name: month_start
+        tests: [not_null]
+      - name: business_unit
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['dtc', 'sephora_us', 'sephora_ca', 'sephora_kohls']
+      - name: platform
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['meta', 'google', 'tiktok']
+      - name: campaign_key
+        tests: [not_null]
+      - name: forecast_budget
+        description: >
+          The client's planned spend for the day, present on every day of a
+          budgeted month (including past days). The month's budget is the sum of
+          this column.
+      - name: actual_spend
+        description: >
+          Platform-reported spend for a completed, synced day; NULL otherwise.
+          NULL is deliberate: 0 would read as "spent nothing".
+      - name: is_actual
+        description: 1 when actual_spend is the figure to draw, 0 for a forecast day.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+      - name: actuals_through
+        description: >
+          The last day this platform counts as actual: the earlier of its most
+          recent synced day and yesterday in the business timezone.
