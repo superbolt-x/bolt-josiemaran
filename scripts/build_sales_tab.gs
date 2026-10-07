@@ -5,35 +5,45 @@
  * file if it is present and skips it if not.
  *
  * NEEDS build_pacing_tabs.gs: it shares that file's small date helpers and its
- * Metabase refresh (pacingIso_, pacingLabel_, refreshCardFeed_ ...). Apps Script
+ * Metabase refresh (pacingIso_, pacingMonthOf_, refreshCardFeed_ ...). Apps Script
  * files share one namespace, so there is nothing to import, but both must be pasted.
  *
  * ── WHAT IT BUILDS ──────────────────────────────────────────────────────────
- * One script-owned tab, "Gross Sales vs Spend", month to date, with four charts
- * that stand in for the two Shopify charts in the weekly doc:
+ * One script-owned tab, "Gross Sales vs Spend", month to date, with the weekly doc's
+ * two Shopify charts, one chart each, drawn as the doc draws them:
  *
- *   doc: "Gross Sales vs. paid spend"            here: 1 Gross Sales (new vs returning)
- *                                                       2 Paid Spend (Meta / Google / TikTok)
- *   doc: "Spend by type vs. new customers"       here: 3 New Customers
- *                                                       4 Paid Spend (by type)
+ *   Gross Sales vs. paid spend       per day, a stack of new + returning customer gross
+ *                                    sales (left axis) beside a stack of Meta + Google +
+ *                                    TikTok spend (right axis)
+ *   Spend by type vs. new customers  per day, a column of new customers (left axis) beside
+ *                                    a stack of Prospecting / Mixed / Brand / Nonbrand
+ *                                    spend (right axis)
  *
- * ── WHY EACH DOC CHART BECOMES TWO ──────────────────────────────────────────
- * The doc draws sales and spend as PAIRS of stacked bars per day on two axes:
- * $60K of sales next to $5K of spend, each filling its own scale. Google Sheets has
- * no such chart: a combo chart cannot put two stacks side by side, and overlaying
- * them on two axes hides one behind the other. So each is split into two native
- * charts that share the same days, sales above and spend below, in the doc's exact
- * colours. Nothing is lost; what changes is that the eye compares across two charts
- * and not within one. Whether Google would render a hacked-together paired layout
- * well has not been tried, and is not worth betting a weekly deliverable on.
+ * ── HOW THE PAIRS ARE DRAWN ─────────────────────────────────────────────────
+ * Nothing clever. In a STACKED column chart, series assigned to different axes are
+ * drawn as separate stacks SIDE BY SIDE inside each day, with the label centred under
+ * the pair. The table is one row per day; some columns are on the left axis, the rest
+ * on the right. (An earlier version of this file split each doc chart into two charts
+ * on the belief that Sheets could not do this. That belief had never been tested. A
+ * throwaway spike on the live sheet, rendered and compared with the doc, showed
+ * the plain layout already gives the doc's chart.)
+ *
+ * What the spike also showed, and why the axis options below are set the way they are:
+ *  - Explicit axis ranges and a gridline count ARE honoured. Each axis is therefore
+ *    given a "nice" maximum so both have the same five gridlines, as the doc's do
+ *    ($0/$15K/$30K/$45K/$60K against $0/$1.25K/$2.5K/$3.75K/$5K). Left to
+ *    themselves the two axes pick unrelated scales and the gridlines do not line up.
+ *  - The axis LABELS follow the cells' number format, not the vAxes format option, so
+ *    customers are a count and the rest are dollars with no decimals.
+ *  - A series that is blank all month is dropped by Google itself (TikTok today).
  *
  * ── MONTH TO DATE, DECIDED RULE ─────────────────────────────────────────────
  * The doc's version showed a hand-picked 10 days (9/18-9/27) split "Pre / Post Spend
- * Adjustment" around one spend decision on 9/23. That was a one-off, so this shows
- * the month so far instead, through the last complete day. The month follows the
- * data, like the pacing tabs: on the 1st it still shows the month that just closed.
- * An override in B2 shows another month. There is deliberately no event-date
- * feature: how this chart evolves is not known yet.
+ * Adjustment" around one spend decision on 9/23. That was a one-off, so this shows the
+ * month so far, through the last complete day. The month follows the data, like the
+ * pacing tabs: on the 1st it still shows the month that just closed. B2 overrides it.
+ * There is deliberately no event-date feature: how this chart evolves is not known yet.
+ * At month end that is 31 pairs, so the charts are 1,100px wide.
  *
  * ── DEFINITIONS (and why they differ from the DTC WoW report) ───────────────
  *  - Spend is what the weekly doc counts: Meta, Google and, when it launches, TikTok
@@ -41,11 +51,10 @@
  *    Overall" leaves Lead Gen out, so the two will not agree on Meta spend.
  *  - TikTok GMV Max is EXCLUDED: its revenue is TikTok Shop GMV, which never reaches
  *    Shopify, and these charts compare spend with Shopify sales.
- *  - A spend series that is zero or blank all month is dropped (TikTok today).
  *  - "TikTok spend" has no sampled colour (there are no TikTok bars in the doc chart
  *    to sample); it uses the light blue the pacing charts use for Meta prospecting.
- *  - Chart titles carry no month, for the same reason as the pacing tabs: a title is
- *    a chart's identity, and the chart is edited in place so a linked Doc survives.
+ *  - Chart titles carry no month, so a chart is edited in place and keeps its ID,
+ *    which keeps a Doc or Slides link to it alive.
  */
 
 var SALES_CARD_ID = 57544;   // "JM – DTC Sales vs Spend", built from metabase/03_dtc_sales_vs_spend.sql.
@@ -56,40 +65,49 @@ function salesFeedName_() { return 'dtc sales vs spend @ ' + SALES_CARD_ID; }
 var SALES_TAB = 'Gross Sales vs Spend';
 var SALES_FIRST_BLOCK_ROW = 5;
 var SALES_BLOCK_ROWS      = 38;
-var SALES_CHART           = { width: 780, height: 320 };
+var SALES_CHART           = { width: 1100, height: 420 };
 var SALES_NOTE_COLOR      = '#66756f';
+var SALES_GRIDLINES       = 5;     // same count on both axes, so their gridlines line up
 var SALES_REQUIRED_COLS   = ['date', 'month_start', 'new_customer_gross_sales',
   'returning_customer_gross_sales', 'new_customers', 'spend_meta', 'spend_google', 'spend_tiktok',
   'spend_prospecting', 'spend_mixed', 'spend_brand', 'spend_nonbrand'];
 
-// Colours are sampled from the doc's rendered charts. Stack order is bottom to top.
-var SALES_BLOCKS = [
-  { id: 'sales', title: 'Gross Sales — new vs returning customers', stacked: true, fmt: '$#,##0',
-    summary: 'gross sales',
-    series: [
-      { col: 'new_customer_gross_sales',       label: 'New-customer gross sales',       color: '#D98C00' },
-      { col: 'returning_customer_gross_sales', label: 'Returning-customer gross sales', color: '#1CB07A' }] },
-  { id: 'spend', title: 'Paid Spend — Meta, Google, TikTok', stacked: true, fmt: '$#,##0',
-    summary: 'paid spend',
-    series: [
-      { col: 'spend_meta',   label: 'Meta spend',   color: '#172A7B' },
-      { col: 'spend_google', label: 'Google spend', color: '#3C78D8' },
-      { col: 'spend_tiktok', label: 'TikTok spend', color: '#A4C2F4' }] },
-  { id: 'newcust', title: 'New Customers', stacked: false, fmt: '#,##0', legend: 'none',
-    summary: 'new customers',
-    series: [ { col: 'new_customers', label: 'New customers', color: '#908B82' } ] },
-  { id: 'type', title: 'Paid Spend — by type', stacked: true, fmt: '$#,##0',
-    summary: 'paid spend',
-    series: [
-      { col: 'spend_prospecting', label: 'Prospecting',                      color: '#EB6835' },
-      { col: 'spend_mixed',       label: 'Mixed (retargeting + reactivation)', color: '#4B3AA7' },
-      { col: 'spend_brand',       label: 'Brand',                            color: '#3C78D8' },
-      { col: 'spend_nonbrand',    label: 'Nonbrand',                         color: '#9DC0EF' }] }
+// Colours are sampled from the doc's rendered charts. `left` series use the left axis and
+// `right` the right axis; stack order is bottom to top within each.
+var SALES_CHARTS = [
+  { id: 'sales', title: 'Gross Sales vs. paid spend',
+    leftTitle: 'Gross Sales', rightTitle: 'Paid spend',
+    left: [
+      { col: 'new_customer_gross_sales',       label: 'New-customer gross sales',       color: '#D98C00', fmt: '$#,##0' },
+      { col: 'returning_customer_gross_sales', label: 'Returning-customer gross sales', color: '#1CB07A', fmt: '$#,##0' }],
+    right: [
+      { col: 'spend_meta',   label: 'Meta spend',   color: '#172A7B', fmt: '$#,##0' },
+      { col: 'spend_google', label: 'Google spend', color: '#3C78D8', fmt: '$#,##0' },
+      { col: 'spend_tiktok', label: 'TikTok spend', color: '#A4C2F4', fmt: '$#,##0' }] },
+  { id: 'type', title: 'Spend by type vs. new customers',
+    leftTitle: 'New customers', rightTitle: 'Paid spend',
+    left: [
+      { col: 'new_customers', label: 'New customers', color: '#908B82', fmt: '#,##0' }],
+    right: [
+      { col: 'spend_prospecting', label: 'Prospecting',                        color: '#EB6835', fmt: '$#,##0' },
+      { col: 'spend_mixed',       label: 'Mixed (retargeting + reactivation)', color: '#4B3AA7', fmt: '$#,##0' },
+      { col: 'spend_brand',       label: 'Brand',                              color: '#3C78D8', fmt: '$#,##0' },
+      { col: 'spend_nonbrand',    label: 'Nonbrand',                           color: '#9DC0EF', fmt: '$#,##0' }] }
 ];
+
+// Charts an earlier version of this file made, as four charts. They keep their place on the
+// tab after it is wiped, so they are removed by title if they are still there.
+var SALES_RETIRED_TITLES = ['Gross Sales — new vs returning customers', 'Paid Spend — Meta, Google, TikTok',
+                            'New Customers', 'Paid Spend — by type'];
+
+var SALES_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /* ════════════════════════════════════════════════════════════════════════════
    PURE LOGIC
    ════════════════════════════════════════════════════════════════════════════ */
+
+/** '2026-09-18' -> 'Sep 18', the label the doc's Shopify charts use. */
+function salesLabel_(iso) { return SALES_MONTHS[Number(iso.slice(5, 7)) - 1] + ' ' + Number(iso.slice(8, 10)); }
 
 /** Feed values -> row objects, columns found by NAME. Blank stays null, never 0. */
 function salesParseFeed_(values, tz) {
@@ -128,30 +146,72 @@ function salesPickMonth_(rows, overrideIso) {
 }
 
 /**
- * One chart's table: the days of the month that have data, and the series that
- * carry any value. A series that is blank or zero all month is dropped, so a
- * platform that has not launched cannot clutter the legend.
+ * The top of an axis: the smallest "nice" tick step that fits the tallest stack, times the
+ * number of intervals. 54,545 with 4 intervals gives 60,000 (ticks of 15,000), and 4,540
+ * gives 5,000 (ticks of 1,250), which are the doc's own axes. 3% headroom keeps the
+ * tallest bar from touching the top.
  */
-function salesBlockModel_(rows, monthIso, block) {
-  var days = rows.filter(function (r) { return r.monthStart === monthIso; })
-                 .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
-  var series = block.series.filter(function (s) {
-    return days.some(function (r) { return r[s.col] !== null && r[s.col] !== 0; });
-  });
-  var matrix = days.map(function (r) {
-    return [pacingLabel_(r.date)].concat(series.map(function (s) {
-      return r[s.col] === null ? '' : r[s.col];
-    }));
-  });
-  return { block: block, series: series, matrix: matrix, empty: days.length === 0 || series.length === 0 };
+function salesNiceMax_(value, intervals) {
+  if (!(value > 0)) return intervals;
+  var step = value * 1.03 / intervals;
+  var mag = Math.pow(10, Math.floor(Math.log(step) / Math.LN10));
+  var nice = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  for (var i = 0; i < nice.length; i++) {
+    if (nice[i] * mag >= step) return nice[i] * mag * intervals;
+  }
+  return 10 * mag * intervals;
 }
 
+/**
+ * One chart's table and axes: the days of the month that have data, the series that carry
+ * any value (a series blank or zero all month is dropped), and a maximum for each axis from
+ * the tallest daily stack on that side.
+ */
+function salesChartModel_(rows, monthIso, cfg) {
+  var days = rows.filter(function (r) { return r.monthStart === monthIso; })
+                 .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  function live(list) {
+    return list.filter(function (s) {
+      return days.some(function (r) { return r[s.col] !== null && r[s.col] !== 0; });
+    });
+  }
+  var left = live(cfg.left), right = live(cfg.right);
+  var columns = left.map(function (s) { return { s: s, axis: 0 }; })
+                    .concat(right.map(function (s) { return { s: s, axis: 1 }; }));
+
+  var matrix = days.map(function (r) {
+    return [salesLabel_(r.date)].concat(columns.map(function (c) {
+      return r[c.s.col] === null ? '' : r[c.s.col];
+    }));
+  });
+
+  function tallest(list) {
+    var best = 0;
+    days.forEach(function (r) {
+      var sum = 0;
+      list.forEach(function (s) { if (r[s.col] !== null) sum += r[s.col]; });
+      if (sum > best) best = sum;
+    });
+    return best;
+  }
+  return { cfg: cfg, columns: columns, matrix: matrix, nLeft: left.length, nRight: right.length,
+           leftMax: salesNiceMax_(tallest(left), SALES_GRIDLINES - 1),
+           rightMax: salesNiceMax_(tallest(right), SALES_GRIDLINES - 1),
+           empty: days.length === 0 || columns.length === 0 };
+}
+
+/** The chart's options, as plain data. Only the axes that have a series are configured. */
 function salesChartOptions_(model) {
-  var series = {};
-  model.series.forEach(function (s, i) { series[i] = { color: s.color }; });
-  return { title: model.block.title, series: series, isStacked: model.block.stacked,
-           legend: { position: model.block.legend || 'top' }, vAxis: { format: model.block.fmt },
-           width: SALES_CHART.width, height: SALES_CHART.height };
+  var series = {}, vAxes = {};
+  model.columns.forEach(function (c, i) { series[i] = { color: c.s.color, targetAxisIndex: c.axis }; });
+  if (model.nLeft) {
+    vAxes[0] = { title: model.cfg.leftTitle, viewWindow: { min: 0, max: model.leftMax }, gridlines: { count: SALES_GRIDLINES } };
+  }
+  if (model.nRight) {
+    vAxes[1] = { title: model.cfg.rightTitle, viewWindow: { min: 0, max: model.rightMax }, gridlines: { count: SALES_GRIDLINES } };
+  }
+  return { title: model.cfg.title, isStacked: true, series: series, vAxes: vAxes,
+           legend: { position: 'bottom' }, width: SALES_CHART.width, height: SALES_CHART.height };
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -194,9 +254,14 @@ function buildSalesTab_(ss) {
       (pick.overrideIgnored ? '  (Month override ignored: that month is not in the feed.)' : ''))
       .setFontColor(SALES_NOTE_COLOR);
 
-    SALES_BLOCKS.forEach(function (block, i) {
+    // Charts a previous version made, as four, would otherwise sit on the tab beside the new ones.
+    sh.getCharts().forEach(function (ch) {
+      if (SALES_RETIRED_TITLES.indexOf(pacingChartTitle_(ch)) >= 0) sh.removeChart(ch);
+    });
+
+    SALES_CHARTS.forEach(function (cfg, i) {
       var top = SALES_FIRST_BLOCK_ROW + i * SALES_BLOCK_ROWS;
-      var model = salesBlockModel_(rows, pick.month, block);
+      var model = salesChartModel_(rows, pick.month, cfg);
       writeSalesBlock_(sh, top, model);
       if (!model.empty) upsertSalesChart_(sh, top, model);
     });
@@ -207,40 +272,52 @@ function buildSalesTab_(ss) {
   }
 }
 
-function writeSalesBlock_(sh, top, model) {
-  sh.getRange(top, 1).setValue(model.block.title).setFontWeight('bold').setFontSize(12);
-  if (model.empty) {
-    sh.getRange(top + 1, 1).setValue('No complete days with data this month yet.').setFontColor(SALES_NOTE_COLOR);
-    return;
-  }
-  var nCols = 1 + model.series.length, headerRow = top + 3, n = model.matrix.length;
-  var first = headerRow + 1, last = headerRow + n;
-  var totalFmt = model.block.fmt === '#,##0' ? '#,##0' : '$#,##0';
-
-  var rng = 'B' + first + ':' + colLetterSales_(nCols) + last;
-  var text = '="Month to date: "&TEXT(SUM(' + rng + '),"' + totalFmt + '")&" ' + model.block.summary;
-  if (model.block.id === 'sales') {
-    text += ', "&TEXT(IFERROR(SUM(B' + first + ':B' + last + ')/SUM(' + rng + '),0),"0%")&" from new customers';
-  }
-  sh.getRange(top + 1, 1).setFormula(text + '."').setFontWeight('bold');
-
-  sh.getRange(headerRow, 1, 1, nCols)
-    .setValues([['Date'].concat(model.series.map(function (s) { return s.label; }))]).setFontWeight('bold');
-  // Day labels as TEXT ('10/6'): a real date column makes the chart draw a continuous
-  // time axis with thin bars, where the doc's charts are discrete.
-  sh.getRange(first, 1, n, 1).setNumberFormat('@');
-  sh.getRange(first, 1, n, nCols).setValues(model.matrix);
-  sh.getRange(first, 2, n, nCols - 1).setNumberFormat(model.block.fmt === '#,##0' ? '#,##0' : '$#,##0.00');
-}
-
 function colLetterSales_(n) {
   var s = '';
   while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - m - 1) / 26; }
   return s;
 }
 
+function writeSalesBlock_(sh, top, model) {
+  sh.getRange(top, 1).setValue(model.cfg.title).setFontWeight('bold').setFontSize(12);
+  if (model.empty) {
+    sh.getRange(top + 1, 1).setValue('No complete days with data this month yet.').setFontColor(SALES_NOTE_COLOR);
+    return;
+  }
+  var nCols = 1 + model.columns.length, headerRow = top + 3, n = model.matrix.length;
+  var first = headerRow + 1, last = headerRow + n;
+  var leftEnd = colLetterSales_(1 + model.nLeft), rightStart = colLetterSales_(2 + model.nLeft);
+  var rightEnd = colLetterSales_(nCols);
+
+  // A live one-line summary: sales or customers on the left, spend on the right.
+  var parts = [];
+  if (model.nLeft) {
+    var leftFmt = model.columns[0].s.fmt === '#,##0' ? '#,##0' : '$#,##0';
+    var leftRng = 'B' + first + ':' + leftEnd + last;
+    var leftWord = model.cfg.id === 'sales' ? ' gross sales' : ' new customers';
+    var lead = '"Month to date: "&TEXT(SUM(' + leftRng + '),"' + leftFmt + '")&"' + leftWord;
+    if (model.cfg.id === 'sales' && model.nLeft > 1) {
+      lead += ' ("&TEXT(IFERROR(SUM(B' + first + ':B' + last + ')/SUM(' + leftRng + '),0),"0%")&" from new customers)';
+    }
+    parts.push(lead + '"');
+  }
+  if (model.nRight) {
+    parts.push('"; "&TEXT(SUM(' + rightStart + first + ':' + rightEnd + last + '),"$#,##0")&" paid spend."');
+  }
+  sh.getRange(top + 1, 1).setFormula('=' + parts.join('&')).setFontWeight('bold');
+
+  sh.getRange(headerRow, 1, 1, nCols)
+    .setValues([['Date'].concat(model.columns.map(function (c) { return c.s.label; }))]).setFontWeight('bold');
+  // Day labels as TEXT ('Oct 6'): a real date column makes the chart draw a continuous time
+  // axis with thin bars, where the doc's charts are discrete.
+  sh.getRange(first, 1, n, 1).setNumberFormat('@');
+  sh.getRange(first, 1, n, nCols).setValues(model.matrix);
+  // The axis labels follow each column's number format, so format by what it holds.
+  model.columns.forEach(function (c, k) { sh.getRange(first, 2 + k, n, 1).setNumberFormat(c.s.fmt); });
+}
+
 function upsertSalesChart_(sh, top, model) {
-  var headerRow = top + 3, nCols = 1 + model.series.length;
+  var headerRow = top + 3, nCols = 1 + model.columns.length;
   var range = sh.getRange(headerRow, 1, 1 + model.matrix.length, nCols);
   var opts = salesChartOptions_(model);
 
@@ -248,19 +325,18 @@ function upsertSalesChart_(sh, top, model) {
   for (var i = 0; i < existing.length; i++) {
     if (pacingChartTitle_(existing[i]) === opts.title) { match = existing[i]; break; }
   }
-  // setStacked() exists only on the column builder, and modify() returns a generic
-  // builder, so the isStacked option is what keeps an EXISTING chart right; setStacked()
-  // just makes a new stacked one right.
-  var b = match ? match.modify()
-        : (opts.isStacked ? sh.newChart().asColumnChart().setStacked() : sh.newChart().asColumnChart());
+  // setStacked() exists only on the column builder, and modify() returns a generic builder,
+  // so the isStacked option is what keeps an EXISTING chart right; setStacked() just makes a
+  // new one right.
+  var b = match ? match.modify() : sh.newChart().asColumnChart().setStacked();
   if (match) b.clearRanges();
   b.addRange(range)
     .setNumHeaders(1)
     .setOption('isStacked', opts.isStacked)
     .setOption('title', opts.title)
     .setOption('series', opts.series)
+    .setOption('vAxes', opts.vAxes)
     .setOption('legend', opts.legend)
-    .setOption('vAxis', opts.vAxis)
     .setOption('width', opts.width)
     .setOption('height', opts.height)
     .setPosition(top, nCols + 2, 0, 0);
