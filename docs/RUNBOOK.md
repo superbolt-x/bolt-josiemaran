@@ -337,7 +337,7 @@ No template tags — which month shows is decided in the sheet.
 Run `refreshAndRebuild`; the daily trigger already calls it. If you pull the card
 with the Metabase extension instead, name its tab `budget pacing @ <id>`.
 
-**4. Look at it once.** `scripts/test_pacing_tabs.py` runs the script in V8 against a
+**4. Look at it once.** `scripts/test_sheet_tabs.py` runs the script in V8 against a
 mock Sheets API, but it cannot show how Google draws the chart. On the first run check:
 the bars are **stacked**; the legend lists only the coloured entries (the grey
 "(actual)" series are meant to be hidden — Apps Script's `visibleInLegend` series
@@ -367,10 +367,12 @@ new one — the loader (so it is read) and this mapping (so it is drawn):
 # 2. here: add a row to seeds/budget_campaign_map.csv. campaign_key must equal the
 #    loader's key; platform + campaign_id say which spend belongs to it; colours and
 #    stack_order say how it is drawn. A line with no live campaign yet can have a blank
-#    campaign_id (TikTok Web did, before it launched).
+#    campaign_id (TikTok Web did, before it launched). For a DTC line also set
+#    spend_type (prospecting / mixed / brand / nonbrand) so it appears in the Gross
+#    Sales vs Spend charts; leave it blank to keep it out (GMV Max is blank).
 python3 scripts/gen_budget_map_macro.py
 python3 scripts/build_sheet_cards.py
-dbt run --select budget_pacing
+dbt run --select budget_pacing dtc_sales_vs_spend
 ```
 
 If a budget line reaches the table without a mapping row, `assert_budget_lines_mapped`
@@ -389,3 +391,68 @@ client already received.
   tell. A failed pacing refresh is toasted but does not stop the rest of the report.
 - **Platform freshness is per platform.** A platform that syncs late shows forecast
   colour for the days it is missing while the others show grey.
+
+
+---
+
+# Gross Sales vs Spend
+
+One more tab, **Gross Sales vs Spend**, month to date, standing in for the two Shopify
+charts in the weekly doc. Each doc chart becomes two native charts that share the same
+days, in the doc's colours:
+
+| Doc chart | Here |
+|---|---|
+| Gross Sales vs. paid spend | **Gross Sales** (new vs returning customers) and **Paid Spend** (Meta / Google / TikTok) |
+| Spend by type vs. new customers | **New Customers** and **Paid Spend** by type (Prospecting / Mixed / Brand / Nonbrand) |
+
+**Why two charts per doc chart.** The doc draws sales and spend as *pairs of stacked bars*
+per day on two axes ($60K of sales beside $5K of spend). Google Sheets has no such chart:
+a combo chart cannot place two stacks side by side. So sales sit above and spend below,
+sharing the days. Nothing in the data changes; the comparison is across two charts instead
+of within one. This has not been tried in the real sheet, only reasoned about.
+
+**Month to date, on purpose.** The doc's version was a hand-picked 10 days (9/18–9/27),
+split "Pre / Post Spend Adjustment" around one decision on 9/23. That was a one-off, so
+the tab shows the month so far, through the last complete day. It follows the data (on the
+1st it still shows the month that just closed) and cell B2 overrides the month. There is no
+event-date feature, because how this chart evolves is not known yet.
+
+Data path: `reporting.josiemaran_shopify_sales_by_segment` + `blended_performance` →
+dbt `dtc_sales_vs_spend` → Metabase card `metabase/03_dtc_sales_vs_spend.sql` → feed tab
+`dtc sales vs spend @ <id>` → `build_sales_tab.gs`.
+
+## Deploying
+
+```bash
+dbt run  --select dtc_sales_vs_spend
+dbt test --select dtc_sales_vs_spend assert_dtc_spend_is_classified assert_dtc_sales_vs_spend_ties_to_sources
+```
+
+Then, exactly as for the pacing card: create the Metabase question **JM – DTC Sales vs
+Spend** (use `metabase/generated/03_dtc_sales_vs_spend_standalone.sql` until dbt has built the
+table), add `scripts/build_sales_tab.gs` as a **third file** in the Apps Script project
+**next to** `build_pacing_tabs.gs` (it needs that file's helpers), set `SALES_CARD_ID`, and
+run `refreshAndRebuild`. Left at `0` the tab is simply skipped.
+
+## What is counted, and why it differs from the DTC WoW report
+
+- **Lead Gen is included**, as Prospecting. The doc's Meta bar and Prospecting bar include
+  it (2026-09-27: $2,215 Meta Overall + $404 Lead Gen = $2,619; the chart reads ~$2,625).
+  `campaign_segments.csv` leaves Lead Gen unmapped, so the DTC WoW report's "Paid DTC
+  Overall" excludes it and **the two will not agree on Meta spend**. That is a gap in the
+  existing report's definition, not something these charts introduce.
+- **TikTok GMV Max is excluded.** Its revenue is TikTok Shop GMV, which never reaches
+  Shopify; these charts compare spend with Shopify sales.
+- **TikTok spend** shows only once a TikTok line with a `spend_type` (TikTok Web) has spend.
+  A series that is blank or zero all month is dropped.
+- **TikTok's light blue is not sampled** from the doc (there are no TikTok bars in it to
+  sample); it reuses the light blue of the pacing charts.
+- **Spend is blank, not 0, on a day a platform has not synced.** Sales still show.
+
+## If a test fails
+
+- `assert_dtc_spend_is_classified`: a DTC campaign is in `campaign_segments.csv` but not in
+  `budget_campaign_map.csv`, so its spend would vanish from these charts. Add it there.
+- `assert_dtc_sales_vs_spend_ties_to_sources`: the model dropped or duplicated something, or
+  the platform and type cuts disagree (a campaign with a platform but no `spend_type`).

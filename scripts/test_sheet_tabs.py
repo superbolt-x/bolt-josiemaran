@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Tests for scripts/build_pacing_tabs.gs, run in a real V8 with a mock Sheets API.
+Tests for scripts/build_pacing_tabs.gs and scripts/build_sales_tab.gs, run in a real V8
+with a mock Sheets API.
 
     pip install py-mini-racer
-    python3 scripts/test_pacing_tabs.py
+    python3 scripts/test_sheet_tabs.py
 
 Why this exists: Apps Script cannot be run outside Google, so a bug in the chart
 builder would otherwise first show up in the client's sheet. This loads the
@@ -27,10 +28,17 @@ except ImportError:
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GS = (ROOT / "scripts" / "build_pacing_tabs.gs").read_text()
+SALES_GS = (ROOT / "scripts" / "build_sales_tab.gs").read_text()
 
 PRELUDE = r"""
 var Logger = { log: function () {} };
-var Utilities = { formatDate: function (d) { return d.toISOString().slice(0, 10); } };
+var Utilities = { formatDate: function (d) { return d.toISOString().slice(0, 10); },
+                  parseCsv: function (t) { return t.trim().split('\n').map(function (l) { return l.split(','); }); } };
+var UrlFetchApp = { calls: [], next: null, fetch: function (u, o) { UrlFetchApp.calls.push({ url: u, opts: o }); return UrlFetchApp.next; } };
+function mbConfig_() { return { url: 'https://mb.example', key: 'KEY' }; }
+function fakeResponse(code, text) { return { getResponseCode: function () { return code; }, getContentText: function () { return text; } }; }
+var SpreadsheetApp = { getActive: function () { return CURRENT_SS; } };
+var CURRENT_SS = null;
 
 function makeBuilder(existing) {
   var b = { opts: {}, ranges: [], stacked: false, numHeaders: 0, pos: null, id: null };
@@ -58,7 +66,8 @@ function chartOf(b) {
 }
 var NEXT_CHART_ID = 1;
 function makeSheet(name) {
-  var sh = { name: name, cells: {}, charts: [] };
+  var sh = { name: name, cells: {}, charts: [], log: [] };
+  sh.setFrozenRows = function () {};
   var key = function (r, c) { return r + ',' + c; };
   var cell = function (r, c) { return sh.cells[key(r, c)] || (sh.cells[key(r, c)] = { v: null, f: null, nf: null }); };
   sh.getRange = function (r, c, nr, nc) {
@@ -66,11 +75,12 @@ function makeSheet(name) {
     var rng = { desc: [r, c, nr, nc] };
     rng.setValue = function (v) { var x = cell(r, c); x.v = v; x.f = null; return rng; };
     rng.setValues = function (vals) {
+      sh.log.push('values');
       for (var i = 0; i < nr; i++) for (var j = 0; j < nc; j++) { var x = cell(r + i, c + j); x.v = vals[i][j]; x.f = null; }
       return rng;
     };
     rng.setFormula = function (f) { var x = cell(r, c); x.f = f; x.v = null; return rng; };
-    rng.setNumberFormat = function (nf) { for (var i = 0; i < nr; i++) for (var j = 0; j < nc; j++) cell(r + i, c + j).nf = nf; return rng; };
+    rng.setNumberFormat = function (nf) { sh.log.push('fmt'); for (var i = 0; i < nr; i++) for (var j = 0; j < nc; j++) cell(r + i, c + j).nf = nf; return rng; };
     rng.getValue = function () { var x = sh.cells[key(r, c)]; return x && x.v !== null ? x.v : ''; };
     ['setFontWeight', 'setFontSize', 'setFontColor'].forEach(function (m) { rng[m] = function () { return rng; }; });
     return rng;
@@ -258,6 +268,159 @@ class PacingTabs(unittest.TestCase):
         ctx = MiniRacer(); ctx.eval(GS); ctx.eval(PRELUDE)         # PACING_CARD_ID left at 0
         ctx.eval("var s0 = makeSpreadsheet('budget pacing @ 0', [['date']]); buildPacingTabs_(s0);")
         self.assertEqual(json.loads(ctx.eval("JSON.stringify(Object.keys(s0.sheets))")), ["budget pacing @ 0"])
+
+
+SALES_COLS = ["date", "month_start", "new_customer_gross_sales", "returning_customer_gross_sales",
+              "gross_sales", "new_customers", "spend_meta", "spend_google", "spend_tiktok",
+              "spend_prospecting", "spend_mixed", "spend_brand", "spend_nonbrand"]
+
+
+def sales_rows(days=6, month="2026-10-01", tiktok=None, google_gap_on_last=False):
+    rows = []
+    for d in range(1, days + 1):
+        iso = f"{month[:8]}{d:02d}"
+        meta, google = 1500.0 + d, 1800.0 + d
+        last_gap = google_gap_on_last and d == days
+        rows.append([iso, month, 6000.0 + d, 24000.0 + d, 30000.0 + 2 * d, 80 + d,
+                     meta, "" if last_gap else google, tiktok if tiktok is not None else "",
+                     700.0, 800.0, "" if last_gap else 1300.0, "" if last_gap else 500.0])
+    return rows
+
+
+class SalesTab(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ctx = MiniRacer()
+        cls.ctx.eval(GS.replace("var PACING_CARD_ID = 0;", "var PACING_CARD_ID = 99;"))
+        cls.ctx.eval(SALES_GS.replace("var SALES_CARD_ID = 0;", "var SALES_CARD_ID = 98;"))
+        cls.ctx.eval(PRELUDE)
+
+    def js(self, expr):
+        return json.loads(self.ctx.eval(f"JSON.stringify({expr})"))
+
+    def build(self, rows, name="v"):
+        self.ctx.eval(f"var {name} = makeSpreadsheet('dtc sales vs spend @ 98', {json.dumps([SALES_COLS] + rows)});")
+        self.ctx.eval(f"buildSalesTab_({name});")
+        return name
+
+    def test_four_charts_with_the_right_titles_and_stacking(self):
+        v = self.build(sales_rows())
+        charts = self.js(f"{v}.sheets['Gross Sales vs Spend'].charts")
+        self.assertEqual({c["opts"]["title"]: c["stacked"] for c in charts}, {
+            "Gross Sales — new vs returning customers": True,
+            "Paid Spend — Meta, Google, TikTok": True,
+            "New Customers": False,
+            "Paid Spend — by type": True})
+
+    def test_doc_colours_and_stack_order(self):
+        v = self.build(sales_rows())
+        by = {c["opts"]["title"]: [s["color"] for _, s in sorted(c["opts"]["series"].items(), key=lambda kv: int(kv[0]))]
+              for c in self.js(f"{v}.sheets['Gross Sales vs Spend'].charts")}
+        self.assertEqual(by["Gross Sales — new vs returning customers"], ["#D98C00", "#1CB07A"])
+        self.assertEqual(by["Paid Spend — by type"], ["#EB6835", "#4B3AA7", "#3C78D8", "#9DC0EF"])
+        self.assertEqual(by["New Customers"], ["#908B82"])
+
+    def test_a_series_that_is_blank_all_month_is_dropped_and_returns_when_it_has_spend(self):
+        v = self.build(sales_rows())
+        spend = [c for c in self.js(f"{v}.sheets['Gross Sales vs Spend'].charts") if c["opts"]["title"].startswith("Paid Spend — Meta")][0]
+        self.assertEqual(len(spend["opts"]["series"]), 2)                    # TikTok dropped
+        v2 = self.build(sales_rows(tiktok=120.0), name="v2")                 # TikTok Web has launched
+        spend2 = [c for c in self.js(f"{v2}.sheets['Gross Sales vs Spend'].charts") if c["opts"]["title"].startswith("Paid Spend — Meta")][0]
+        self.assertEqual(len(spend2["opts"]["series"]), 3)
+
+    def test_month_to_date_has_only_the_days_in_the_feed(self):
+        v = self.build(sales_rows(days=6))
+        cells = self.js(f"{v}.sheets['Gross Sales vs Spend'].cells")
+        top = 5
+        self.assertEqual(cells[f"{top + 4},1"]["v"], "10/1")
+        self.assertEqual(cells[f"{top + 9},1"]["v"], "10/6")
+        self.assertNotIn(f"{top + 10},1", cells)                              # no 10/7 row
+        chart = self.js(f"{v}.sheets['Gross Sales vs Spend'].charts[0]")
+        self.assertEqual(chart["ranges"][0][2], 1 + 6)                         # header + 6 days
+        self.assertEqual(cells["2,6"]["v"], "2026-10-06")                      # data through
+
+    def test_a_platform_that_has_not_synced_is_a_gap_not_a_zero(self):
+        v = self.build(sales_rows(days=3, google_gap_on_last=True))
+        cells = self.js(f"{v}.sheets['Gross Sales vs Spend'].cells")
+        top = 5 + 38                                                         # the spend-by-platform block
+        self.assertEqual(cells[f"{top + 6},3"]["v"], "")                       # Google on 10/3: blank
+        self.assertIsInstance(cells[f"{top + 6},2"]["v"], (int, float))        # Meta on 10/3: a number
+
+    def test_summary_is_a_live_formula(self):
+        v = self.build(sales_rows())
+        cells = self.js(f"{v}.sheets['Gross Sales vs Spend'].cells")
+        f = cells["6,1"]["f"]
+        self.assertTrue(f.startswith('="Month to date: "&TEXT(SUM(B9:C14)'), f)
+        self.assertIn("from new customers", f)
+
+    def test_month_follows_the_data_and_an_unknown_override_is_ignored(self):
+        v = self.build(sales_rows(days=3, month="2026-09-01") + sales_rows(days=6, month="2026-10-01"))
+        self.assertEqual(self.js(f"{v}.sheets['Gross Sales vs Spend'].cells['2,4'].v"), "October 2026")
+        self.ctx.eval(f"{v}.sheets['Gross Sales vs Spend'].getRange(2, 2).setValue('2026-09-01'); buildSalesTab_({v});")
+        self.assertEqual(self.js(f"{v}.sheets['Gross Sales vs Spend'].cells['2,4'].v"), "September 2026")
+        self.ctx.eval(f"{v}.sheets['Gross Sales vs Spend'].getRange(2, 2).setValue('2030-01-01'); buildSalesTab_({v});")
+        self.assertIn("ignored", self.js(f"{v}.sheets['Gross Sales vs Spend'].cells['3,1'].v"))
+
+    def test_rebuild_edits_in_place_without_duplicating_charts(self):
+        v = self.build(sales_rows())
+        ids = sorted(self.js(f"{v}.sheets['Gross Sales vs Spend'].charts.map(function (c) {{ return c.id; }})"))
+        self.ctx.eval(f"buildSalesTab_({v});")
+        again = sorted(self.js(f"{v}.sheets['Gross Sales vs Spend'].charts.map(function (c) {{ return c.id; }})"))
+        self.assertEqual(ids, again)
+
+    def test_a_failure_is_written_into_the_tab_and_does_not_throw(self):
+        self.ctx.eval("var bad = makeSpreadsheet('dtc sales vs spend @ 98', [['date'], ['2026-10-01']]); buildSalesTab_(bad);")
+        self.assertTrue(self.js("bad.sheets['Gross Sales vs Spend'].cells['3,1'].v").startswith("⚠ Build failed"))
+
+    def test_without_the_pacing_file_it_says_so_plainly(self):
+        ctx = MiniRacer(); ctx.eval(SALES_GS.replace("var SALES_CARD_ID = 0;", "var SALES_CARD_ID = 98;")); ctx.eval(PRELUDE)
+        ctx.eval(f"var w = makeSpreadsheet('dtc sales vs spend @ 98', {json.dumps([SALES_COLS] + sales_rows())}); buildSalesTab_(w);")
+        msg = json.loads(ctx.eval("JSON.stringify(w.sheets['Gross Sales vs Spend'].cells['3,1'].v)"))
+        self.assertIn("build_pacing_tabs.gs", msg)
+
+    def test_disabled_until_a_card_id_is_set(self):
+        ctx = MiniRacer(); ctx.eval(GS); ctx.eval(SALES_GS); ctx.eval(PRELUDE)
+        ctx.eval("var s0 = makeSpreadsheet('dtc sales vs spend @ 0', [['date']]); buildSalesTab_(s0);")
+        self.assertEqual(json.loads(ctx.eval("JSON.stringify(Object.keys(s0.sheets))")), ["dtc sales vs spend @ 0"])
+
+
+class MetabaseRefresh(unittest.TestCase):
+    """refreshCardFeed_ is shared by both cards; the order of operations is the whole point."""
+
+    def setUp(self):
+        self.ctx = MiniRacer()
+        self.ctx.eval(GS)
+        self.ctx.eval(PRELUDE)
+        self.ctx.eval("CURRENT_SS = makeSpreadsheet('x', [['a']]);")
+
+    def test_date_formats_are_set_before_values_are_written(self):
+        csv = "date,month_start,spend\n2026-10-01,2026-10-01,5\n2026-10-02,2026-10-01,6"
+        self.ctx.eval(f"UrlFetchApp.next = fakeResponse(200, {json.dumps(csv)});")
+        n = json.loads(self.ctx.eval("JSON.stringify(refreshCardFeed_(7, 'feed7', ['date', 'month_start']))"))
+        self.assertEqual(n, 2)
+        log = json.loads(self.ctx.eval("JSON.stringify(CURRENT_SS.sheets['feed7'].log)"))
+        self.assertLess(log.index("fmt"), log.index("values"), log)
+        self.assertEqual(json.loads(self.ctx.eval("JSON.stringify(CURRENT_SS.sheets['feed7'].cells['2,1'].nf)")), "yyyy-mm-dd")
+        call = json.loads(self.ctx.eval("JSON.stringify(UrlFetchApp.calls[0])"))
+        self.assertEqual(call["url"], "https://mb.example/api/card/7/query/csv")
+        self.assertEqual(call["opts"]["headers"]["x-api-key"], "KEY")
+
+    def test_an_auth_failure_names_the_likely_cause(self):
+        self.ctx.eval("UrlFetchApp.next = fakeResponse(401, 'nope');")
+        with self.assertRaises(Exception) as cm:
+            self.ctx.eval("refreshCardFeed_(7, 'feed7', ['date'])")
+        self.assertIn("401", str(cm.exception))
+        self.assertIn("API key", str(cm.exception))
+
+    def test_an_empty_card_is_an_error_not_a_blank_tab(self):
+        self.ctx.eval("UrlFetchApp.next = fakeResponse(200, '');")
+        with self.assertRaises(Exception):
+            self.ctx.eval("refreshCardFeed_(7, 'feed7', ['date'])")
+
+    def test_both_cards_are_off_until_configured(self):
+        ctx = MiniRacer(); ctx.eval(GS); ctx.eval(SALES_GS); ctx.eval(PRELUDE)
+        self.assertEqual(json.loads(ctx.eval("JSON.stringify([refreshPacingFeed_(), refreshSalesFeed_()])")), [0, 0])
+
 
 
 if __name__ == "__main__":

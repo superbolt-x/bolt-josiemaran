@@ -257,6 +257,9 @@ function buildReport() {
   // optional: if it is not in this project the report is exactly what it was
   // before, and buildPacingTabs_ never throws (it writes a failure into its tab).
   if (typeof buildPacingTabs_ === 'function') buildPacingTabs_(ss);
+  // Gross Sales vs Spend lives in build_sales_tab.gs, also optional, and needs
+  // build_pacing_tabs.gs for its helpers. Same contract: it never throws.
+  if (typeof buildSalesTab_ === 'function') buildSalesTab_(ss);
   orderTabs_(ss);
   ss.toast('Rebuilt. Feed tab expected: "' + FEED + '"', 'Done', 8);
 }
@@ -827,6 +830,9 @@ function writeReadme_(ss) {
     ['The monthly budget is the SUM of the daily budgets; type a figure into a block\'s'],
     ['"Budget override" cell to quote a nominal one instead. Do not use the client'],
     ['sheet\'s own Total Budget row: it leaves out NB PMax.'],
+    ['GROSS SALES VS SPEND (scripts/build_sales_tab.gs, a third file; needs the pacing file):'],
+    ['month to date. New vs returning gross sales, new customers, and DTC spend by'],
+    ['platform and by type. Lead Gen counts as Prospecting; TikTok GMV Max is excluded.'],
     [''],
     ['TO REBUILD: Extensions -> Apps Script -> Save -> Run buildReport. Metric sets'],
     ['live in SHAPES, slides in TABS, colours in C.']
@@ -846,7 +852,7 @@ function writeReadme_(ss) {
 
 function orderTabs_(ss) {
   ['README','Health','DTC WoW','MTD','Sephora Traffic WoW','Sephora Collab WoW',
-   'MTD Sephora','GA4 Channels','Site','Campaigns','Budget Pacing','DoD Budgets', FEED].forEach(function (n, i) {
+   'MTD Sephora','GA4 Channels','Site','Campaigns','Budget Pacing','DoD Budgets','Gross Sales vs Spend', FEED].forEach(function (n, i) {
     var sh = ss.getSheetByName(n);
     if (sh) { ss.setActiveSheet(sh); ss.moveActiveSheet(i + 1); }
   });
@@ -960,6 +966,13 @@ function refreshAndRebuild() {
     catch (e) {
       Logger.log('Pacing feed refresh failed: ' + e.message);
       SpreadsheetApp.getActive().toast('Pacing feed NOT refreshed: ' + e.message, 'Budget Pacing', 15);
+    }
+  }
+  if (typeof refreshSalesFeed_ === 'function') {
+    try { refreshSalesFeed_(); }
+    catch (e) {
+      Logger.log('Sales feed refresh failed: ' + e.message);
+      SpreadsheetApp.getActive().toast('Sales feed NOT refreshed: ' + e.message, 'Gross Sales vs Spend', 15);
     }
   }
   buildReport();

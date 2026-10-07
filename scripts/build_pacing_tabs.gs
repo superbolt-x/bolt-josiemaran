@@ -439,36 +439,41 @@ function prunePacingCharts_(sh, cfg, wanted) {
 }
 
 /**
- * Pull the pacing card into its feed tab. Same shape as refreshFeed_ in
+ * Pull a Metabase card into a feed tab. Same shape as refreshFeed_ in
  * build_gsheet.gs, and the same two lessons: use the CSV endpoint (it keeps the
  * column order) and set number formats BEFORE writing values, because Sheets
- * coerces on write — the two date columns must land as real dates.
+ * coerces on write: the date columns must land as real dates. Shared by every
+ * card this project pulls (pacing, sales), so they cannot drift apart.
  */
-function refreshPacingFeed_() {
-  if (!PACING_CARD_ID) return 0;
+function refreshCardFeed_(cardId, tabName, dateCols) {
   var cfg = mbConfig_();
   var res = UrlFetchApp.fetch(
-    cfg.url + '/api/card/' + PACING_CARD_ID + '/query/csv',
+    cfg.url + '/api/card/' + cardId + '/query/csv',
     { method: 'post', headers: { 'x-api-key': cfg.key }, muteHttpExceptions: true });
   var code = res.getResponseCode();
   if (code !== 200) {
-    throw new Error('Metabase returned ' + code + ' for card ' + PACING_CARD_ID + '. ' +
+    throw new Error('Metabase returned ' + code + ' for card ' + cardId + '. ' +
                     (code === 401 || code === 403
                        ? 'Check the API key and that its group can read the database.'
                        : res.getContentText().slice(0, 300)));
   }
   var rows = Utilities.parseCsv(res.getContentText());
-  if (!rows.length || rows[0].length < 2) throw new Error('Pacing card returned no columns.');
+  if (!rows.length || rows[0].length < 2) throw new Error('Card ' + cardId + ' returned no columns.');
 
   var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(pacingFeedName_()) || ss.insertSheet(pacingFeedName_());
+  var sh = ss.getSheetByName(tabName) || ss.insertSheet(tabName);
   sh.clear();
   var n = rows.length;
-  ['date', 'month_start'].forEach(function (c) {
+  dateCols.forEach(function (c) {
     var col = rows[0].indexOf(c);
     if (col >= 0) sh.getRange(1, col + 1, n, 1).setNumberFormat('yyyy-mm-dd');
   });
   sh.getRange(1, 1, n, rows[0].length).setValues(rows);
   sh.setFrozenRows(1);
   return n - 1;
+}
+
+function refreshPacingFeed_() {
+  if (!PACING_CARD_ID) return 0;
+  return refreshCardFeed_(PACING_CARD_ID, pacingFeedName_(), ['date', 'month_start']);
 }
