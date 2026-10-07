@@ -53,5 +53,6 @@ models:
               values: [0, 1]
       - name: actuals_through
         description: >
-          The last day this platform counts as actual: the earlier of its most
-          recent synced day and yesterday in the business timezone.
+          The last COMPLETE day for this platform: the earlier of the day before
+          its latest synced day (a later day existing proves a sync happened after
+          it ended) and yesterday in the business timezone.

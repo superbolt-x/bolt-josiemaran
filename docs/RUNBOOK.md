@@ -356,8 +356,11 @@ these two tabs through the Sheets API instead); the day labels are discrete (`9/
   budget defaults to the **sum of the daily budgets**. Type a figure to quote a
   nominal one instead (e.g. `95000`). It survives rebuilds. Do not use the client
   sheet's own "Total Budget" row — it leaves out NB PMax, so it understates DTC.
-- **Actuals through** (row 2): how far the actuals really go. If it is not yesterday,
-  the feed is stale or a platform is late; days past it show as forecast, never as $0.
+- **Actuals through** (row 2): how far the actuals really go. A day counts as actual only
+  once it is **complete**, meaning the platform has synced a *later* day (that proves a sync
+  happened after it ended). So early in the morning, before the first post-midnight sync
+  lands, it can be two days back; that is correct, not a fault. If it is further behind, the
+  feed is stale or a platform is late. Days past it show as forecast, never as $0.
 
 ## Adding a campaign
 
@@ -394,6 +397,13 @@ client already received.
   tell. A failed pacing refresh is toasted but does not stop the rest of the report.
 - **Platform freshness is per platform.** A platform that syncs late shows forecast
   colour for the days it is missing while the others show grey.
+- **Why a day must be complete to count.** A platform's latest synced day is usually still
+  filling. Checked 2026-10-07: Sephora US for 10/6 read $1,705 early in the morning and $2,375
+  once the rebuild caught up, while every earlier day moved by cents. Drawing that as a finished
+  grey bar understated both the bar and the "% of budget spent" headline. The rule (the day
+  before the platform's latest synced day, capped at yesterday) was checked by hiding today's
+  rows and confirming it stops one day earlier. If a platform stops spending entirely, it
+  stalls one day behind its last spend day and the days after stay forecast, not $0.
 
 
 ---

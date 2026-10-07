@@ -21,6 +21,14 @@ dtc_sales_vs_spend__today as (
     select convert_timezone('US/Eastern', getdate())::date as today_local
 ),
 
+dtc_sales_vs_spend__shopify_through as (
+-- Last COMPLETE Shopify day, by the same rule as spend below.
+    select
+        least(max(date) - 1, (select today_local from dtc_sales_vs_spend__today) - 1) as through_date
+    from reporting.josiemaran_shopify_sales_by_segment
+    where date_granularity = 'day'
+),
+
 dtc_sales_vs_spend__shopify_daily as (
 select
         date,
@@ -30,7 +38,7 @@ select
         sum(new_customers)              as new_customers
     from reporting.josiemaran_shopify_sales_by_segment
     where date_granularity = 'day'
-      and date <= (select today_local from dtc_sales_vs_spend__today) - 1
+      and date <= (select through_date from dtc_sales_vs_spend__shopify_through)
     group by 1
 ),
 
@@ -49,11 +57,12 @@ select
 ),
 
 dtc_sales_vs_spend__freshness as (
--- Last day each platform has synced, capped at yesterday, taken over EVERY
-    -- campaign on the platform so a paused campaign cannot make it look stale.
+-- The last COMPLETE day per platform: the day before its latest synced day,
+    -- capped at yesterday, taken over EVERY campaign on the platform so a paused
+    -- campaign cannot make it look stale.
     select
         platform,
-        least(max(date), (select today_local from dtc_sales_vs_spend__today) - 1) as actuals_through
+        least(max(date) - 1, (select today_local from dtc_sales_vs_spend__today) - 1) as actuals_through
     from dtc_sales_vs_spend__spend_rows
     group by 1
 ),

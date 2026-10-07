@@ -46,12 +46,14 @@ select
 ),
 
 budget_pacing__freshness as (
--- Last day each platform has synced, capped at yesterday. Taken over EVERY
-    -- campaign on the platform, not just the mapped ones, so a paused campaign
-    -- with no rows cannot make the platform look stale.
+-- The last COMPLETE day per platform: the day before its latest synced day,
+    -- capped at yesterday. Taken over EVERY campaign on the platform, not just
+    -- the mapped ones, so a paused campaign with no rows cannot make the platform
+    -- look stale. If a whole platform stops spending, this stalls one day behind
+    -- its last spend day, and the days after that stay forecast instead of 0.
     select
         platform,
-        least(max(date), (select today_local from budget_pacing__today) - 1) as actuals_through
+        least(max(date) - 1, (select today_local from budget_pacing__today) - 1) as actuals_through
     from budget_pacing__spend_daily
     group by 1
 ),
