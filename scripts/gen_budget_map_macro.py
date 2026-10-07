@@ -22,7 +22,7 @@ Why a generated macro and not a dbt seed
   Same reason as gen_segment_macro.py: the mapping must work in the standalone
   (pre-dbt) Metabase card, and a seed needs `dbt seed` to have run first.
 
-Edit the CSV, run this, then re-run scripts/build_pacing_card.py.
+Edit the CSV, run this, then re-run scripts/build_sheet_cards.py.
 """
 import csv, pathlib, re, sys
 
@@ -34,7 +34,11 @@ PLATFORMS = {"meta", "google", "tiktok"}
 UNITS = ["dtc", "sephora_us", "sephora_ca", "sephora_kohls"]
 COLUMNS = ["platform", "campaign_id", "segment_match", "business_unit",
            "campaign_key", "legend_label", "stack_order", "forecast_color",
-           "actual_color"]
+           "actual_color", "spend_type"]
+# How the DTC Shopify charts classify a budget line ("Spend by type vs. new
+# customers"). Blank means the line is not part of that comparison: TikTok GMV Max
+# is blank because its revenue is TikTok Shop GMV, which never reaches Shopify.
+SPEND_TYPES = {"prospecting", "mixed", "brand", "nonbrand"}
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 KEY = re.compile(r"^[a-z0-9_]+$")
 
@@ -72,6 +76,11 @@ for i, r in enumerate(rows, 2):
             sys.exit(f"line {i}: {col} must look like #A4C2F4")
     if not r["legend_label"]:
         sys.exit(f"line {i}: legend_label is required")
+    if r["spend_type"] and r["spend_type"] not in SPEND_TYPES:
+        sys.exit(f"line {i}: spend_type must be blank or one of {sorted(SPEND_TYPES)}")
+    if r["spend_type"] and r["business_unit"] != "dtc":
+        sys.exit(f"line {i}: spend_type only applies to business_unit dtc "
+                 f"(the Shopify comparison is a DTC concept)")
 
     if r["campaign_id"]:
         k = (r["platform"], r["campaign_id"], r["segment_match"])
@@ -93,13 +102,13 @@ for i, r in enumerate(rows, 2):
                      f"A campaign maps either as a whole or per segment, never both.")
         grain_of.setdefault(ck, (grain, i))
 
-    # Rows that share a budget line must agree on how it is drawn, otherwise the
-    # Gsheet would pick whichever row it read first.
+    # Rows that share a budget line must agree on how it is drawn and classified,
+    # otherwise the Gsheet would pick whichever row it read first.
     key = (r["business_unit"], r["platform"], r["campaign_key"])
     attrs = (r["legend_label"], r["stack_order"], r["forecast_color"].upper(),
-             r["actual_color"].upper())
+             r["actual_color"].upper(), r["spend_type"])
     if key in attrs_of and attrs_of[key][0] != attrs:
-        sys.exit(f"line {i}: {key} has different label/order/colours than on "
+        sys.exit(f"line {i}: {key} has different label/order/colours/spend_type than on "
                  f"line {attrs_of[key][1]}. Rows sharing a campaign_key must match.")
     attrs_of.setdefault(key, (attrs, i))
 
@@ -132,18 +141,19 @@ for i, r in enumerate(match_rows):
             f"               '{r['campaign_id']}'::varchar(32) as campaign_id,\n"
             f"               {seg}::varchar(64) as segment_match,\n"
             f"               '{r['business_unit']}'::varchar(32) as business_unit,\n"
-            f"               '{r['campaign_key']}'::varchar(64) as campaign_key")
+            f"               '{r['campaign_key']}'::varchar(64) as campaign_key,\n"
+            f"               '{r['spend_type']}'::varchar(16) as spend_type")
     else:
         lines.append(
             f"        union all select '{r['platform']}', '{r['campaign_id']}', {seg}, "
-            f"'{r['business_unit']}', '{r['campaign_key']}'")
+            f"'{r['business_unit']}', '{r['campaign_key']}', '{r['spend_type']}'")
 campaigns_sql = "\n".join(lines)
 
 # ── jm_budget_keys(): one row per budget line, with how to draw it ───────────
 key_rows = sorted(attrs_of.items(),
                   key=lambda kv: (UNITS.index(kv[0][0]), int(kv[1][0][1]), kv[0][1]))
 klines = []
-for i, ((bu, plat, ck), ((label, order, fc, ac), _)) in enumerate(key_rows):
+for i, ((bu, plat, ck), ((label, order, fc, ac, st), _)) in enumerate(key_rows):
     if i == 0:
         klines.append(
             f"        select '{bu}'::varchar(32) as business_unit,\n"
@@ -152,11 +162,12 @@ for i, ((bu, plat, ck), ((label, order, fc, ac), _)) in enumerate(key_rows):
             f"               '{q(label)}'::varchar(64) as legend_label,\n"
             f"               {int(order)}::integer as stack_order,\n"
             f"               '{fc}'::varchar(7) as forecast_color,\n"
-            f"               '{ac}'::varchar(7) as actual_color")
+            f"               '{ac}'::varchar(7) as actual_color,\n"
+            f"               '{st}'::varchar(16) as spend_type")
     else:
         klines.append(
             f"        union all select '{bu}', '{plat}', '{ck}', '{q(label)}', "
-            f"{int(order)}, '{fc}', '{ac}'")
+            f"{int(order)}, '{fc}', '{ac}', '{st}'")
 keys_sql = "\n".join(klines)
 
 summary = "\n".join(
@@ -194,6 +205,11 @@ DEST.write_text(f"""{{#
                            in (forecast days, actual days). A line with no
                            campaign id yet (TikTok Web before launch) is here
                            but not in jm_budget_campaigns().
+
+  Both carry spend_type (prospecting / mixed / brand / nonbrand, or '' for a
+  line outside the DTC Shopify comparison, e.g. GMV Max). It is how the "Spend by
+  type vs. new customers" chart classifies spend, kept here so a campaign is
+  classified in the one place it is already mapped.
 
   Inline each macro at its use site rather than sharing a CTE -- see the note in
   blended_performance.sql on the Redshift planner "Assert".

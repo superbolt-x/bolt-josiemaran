@@ -1,21 +1,21 @@
-platform,campaign_id,segment_match,business_unit,campaign_key,legend_label,stack_order,forecast_color,actual_color
-meta,120251956330760613,,dtc,prospecting_advplus,Meta Prospecting Adv+,1,#A4C2F4,#D9D9D9
-meta,120214146763940613,,dtc,temp_retargeting,Meta Retargeting (OG ASC),2,#3C78D8,#CCCCCC
-meta,120252630357450613,,dtc,lead_gen,Lead Gen,3,#2343AA,#B7B7B7
-google,21703833786,,dtc,us_branded_pmax,Google US PMax Branded,4,#38761D,#666666
-google,21704002557,,dtc,us_branded_search,Google US Branded Search,5,#6AA84F,#999999
-google,21703908630,,dtc,ca_branded_search,Google CA Branded Search,6,#93C47D,#B7B7B7
-google,24209915936,,dtc,nb_pmax,Google NB PMax,7,#B6D7A8,#CCCCCC
-tiktok,1876696959444129,,dtc,gmv_max,TikTok GMV Max,8,#E69138,#434343
-tiktok,,,dtc,prospecting_web,TikTok Web,9,#F9CB9C,#999999
-meta,120250319355050303,,sephora_us,us_traffic,Meta US Traffic,1,#A4C2F4,#B7B7B7
-meta,120219945963310303,,sephora_us,us_collab,Meta US Collab,2,#3C78D8,#999999
-meta,120250632750520303,Sephora US Collab,sephora_us,new_us_collab,New US Collab,3,#2343AA,#666666
-tiktok,1874691217255666,,sephora_us,us_traffic,TikTok US Traffic,4,#FF9900,#434343
-tiktok,1836369380956178,,sephora_us,us_traffic,TikTok US Traffic,4,#FF9900,#434343
-meta,120250328578570303,,sephora_ca,ca_traffic,Meta CA Traffic,1,#A4C2F4,#B7B7B7
-meta,120239209497810303,,sephora_ca,ca_collab,Meta CA Collab,2,#3C78D8,#999999
-meta,120250632750520303,Sephora CA Collab,sephora_ca,new_ca_collab,New CA Collab,3,#2343AA,#666666
-tiktok,1874694608225890,,sephora_ca,ca_traffic,TikTok CA Traffic,4,#FF9900,#434343
-tiktok,1836386473412625,,sephora_ca,ca_traffic,TikTok CA Traffic,4,#FF9900,#434343
-meta,120234201732920613,,sephora_kohls,kohls_us_traffic,Meta Traffic,1,#A4C2F4,#999999
+platform,campaign_id,segment_match,business_unit,campaign_key,legend_label,stack_order,forecast_color,actual_color,spend_type
+meta,120251956330760613,,dtc,prospecting_advplus,Meta Prospecting Adv+,1,#A4C2F4,#D9D9D9,prospecting
+meta,120214146763940613,,dtc,temp_retargeting,Meta Retargeting (OG ASC),2,#3C78D8,#CCCCCC,mixed
+meta,120252630357450613,,dtc,lead_gen,Lead Gen,3,#2343AA,#B7B7B7,prospecting
+google,21703833786,,dtc,us_branded_pmax,Google US PMax Branded,4,#38761D,#666666,brand
+google,21704002557,,dtc,us_branded_search,Google US Branded Search,5,#6AA84F,#999999,brand
+google,21703908630,,dtc,ca_branded_search,Google CA Branded Search,6,#93C47D,#B7B7B7,brand
+google,24209915936,,dtc,nb_pmax,Google NB PMax,7,#B6D7A8,#CCCCCC,nonbrand
+tiktok,1876696959444129,,dtc,gmv_max,TikTok GMV Max,8,#E69138,#434343,
+tiktok,,,dtc,prospecting_web,TikTok Web,9,#F9CB9C,#999999,prospecting
+meta,120250319355050303,,sephora_us,us_traffic,Meta US Traffic,1,#A4C2F4,#B7B7B7,
+meta,120219945963310303,,sephora_us,us_collab,Meta US Collab,2,#3C78D8,#999999,
+meta,120250632750520303,Sephora US Collab,sephora_us,new_us_collab,New US Collab,3,#2343AA,#666666,
+tiktok,1874691217255666,,sephora_us,us_traffic,TikTok US Traffic,4,#FF9900,#434343,
+tiktok,1836369380956178,,sephora_us,us_traffic,TikTok US Traffic,4,#FF9900,#434343,
+meta,120250328578570303,,sephora_ca,ca_traffic,Meta CA Traffic,1,#A4C2F4,#B7B7B7,
+meta,120239209497810303,,sephora_ca,ca_collab,Meta CA Collab,2,#3C78D8,#999999,
+meta,120250632750520303,Sephora CA Collab,sephora_ca,new_ca_collab,New CA Collab,3,#2343AA,#666666,
+tiktok,1874694608225890,,sephora_ca,ca_traffic,TikTok CA Traffic,4,#FF9900,#434343,
+tiktok,1836386473412625,,sephora_ca,ca_traffic,TikTok CA Traffic,4,#FF9900,#434343,
+meta,120234201732920613,,sephora_kohls,kohls_us_traffic,Meta Traffic,1,#A4C2F4,#999999,

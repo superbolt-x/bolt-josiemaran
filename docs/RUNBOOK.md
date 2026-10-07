@@ -369,7 +369,7 @@ new one — the loader (so it is read) and this mapping (so it is drawn):
 #    stack_order say how it is drawn. A line with no live campaign yet can have a blank
 #    campaign_id (TikTok Web did, before it launched).
 python3 scripts/gen_budget_map_macro.py
-python3 scripts/build_pacing_card.py
+python3 scripts/build_sheet_cards.py
 dbt run --select budget_pacing
 ```
 
