@@ -294,3 +294,177 @@ CLI checks for that explicitly rather than trusting the HTTP status alone.
 it from their Google Account → Security → Third-party access, independent of
 rotating anything else. That kills `tokens.json`'s refresh token immediately;
 getting it working again means redoing the manual consent flow from scratch.
+
+
+---
+
+# Budget Pacing & DoD Budgets
+
+Two Gsheet tabs, four stacked-column charts each (Sephora US, CA, @ Kohl's, DTC):
+
+- **Budget Pacing** — the month in progress. Past days are grey (actual spend),
+  remaining days are colour (the client's forecast budget). Above each chart: the
+  "spent X% of the monthly budget through Y% of the month" headline.
+- **DoD Budgets** — the client's planned spend per day for a month, all in colour.
+  Shows next month once it is budgeted, else the current one.
+
+Data path: client budget sheet → `budget_forecast_to_redshift.py` (cron, 09:00 UTC,
+lives in `josiemaran/` beside this repo) → `gsheet_raw.josie_maran_budget_forecast`
+→ dbt `budget_pacing` (budget beside actual spend from `blended_performance`) →
+Metabase card → feed tab → `build_pacing_tabs.gs` draws the charts.
+
+## Deploying
+
+**1. dbt.** `budget_pacing` reads `blended_performance`, which must already be built.
+`--target josiemaran` is mandatory (there is no default target, on purpose), and dbt lives
+in its own virtualenv. Built and tested 2026-10-07: 17 of 17 tests pass.
+
+```bash
+/home/ubuntu/.dbt-venv/bin/dbt run  --target josiemaran --select budget_pacing
+/home/ubuntu/.dbt-venv/bin/dbt test --target josiemaran --select budget_pacing assert_budget_lines_mapped assert_budget_pacing_spend_ties_to_blended
+```
+
+`assert_budget_pacing_spend_ties_to_blended` proves the campaign → budget-line join
+neither drops nor duplicates spend. If it fails, do not ship the charts.
+
+**2. Metabase question.** Created: **57543**, "JM – Budget Pacing", in collection 4503
+beside the feed. It runs `metabase/02_budget_pacing.sql` against the dbt table. If that
+SQL changes, update the question to match. No template tags — which month shows is decided
+in the sheet. (`metabase/generated/02_budget_pacing_standalone.sql` is only for wiring the
+card up before dbt has built the table; it is no longer needed.)
+
+**3. Apps Script.** In the existing project add a **second file** and paste
+`scripts/build_pacing_tabs.gs`. `PACING_CARD_ID` is already set to 57543 (at `0` the new
+tabs are simply skipped and the existing report is unaffected). Run `refreshAndRebuild`; the
+daily trigger already calls it. If you pull the card with the Metabase extension instead,
+name its tab `budget pacing @ <id>`. If the API Executable deployment is in use, deploy a new
+version after pasting, or the execution-only grant will keep running the old code.
+
+**4. Look at it once.** `scripts/test_sheet_tabs.py` runs the script in V8 against a
+mock Sheets API, but it cannot show how Google draws the chart. On the first run check:
+the bars are **stacked**; the legend lists only the coloured entries (the grey
+"(actual)" series are meant to be hidden — Apps Script's `visibleInLegend` series
+option has not been confirmed in the real sheet, and if the legend shows both, build
+these two tabs through the Sheets API instead); the day labels are discrete (`9/1`,
+`9/2`…), not a continuous date axis.
+
+## Using it
+
+- **Month override** (cell B2 of either tab): type a month, e.g. `2026-09-01`, to look
+  at another one. Blank follows the data. An unknown month is ignored, and says so.
+- **Budget override** (the "Budget override" cell in each pacing block): the monthly
+  budget defaults to the **sum of the daily budgets**. Type a figure to quote a
+  nominal one instead (e.g. `95000`). It survives rebuilds. Do not use the client
+  sheet's own "Total Budget" row — it leaves out NB PMax, so it understates DTC.
+- **Actuals through** (row 2): how far the actuals really go. If it is not yesterday,
+  the feed is stale or a platform is late; days past it show as forecast, never as $0.
+
+## Adding a campaign
+
+A budget line is one row of the client's budget sheet. Two things must know about a
+new one — the loader (so it is read) and this mapping (so it is drawn):
+
+```bash
+# 1. budget_forecast_to_redshift.py: add the line to CAMPAIGN_DEFS (the loader alerts
+#    #data-script-errors and refuses the tab until you do)
+# 2. here: add a row to seeds/budget_campaign_map.csv. campaign_key must equal the
+#    loader's key; platform + campaign_id say which spend belongs to it; colours and
+#    stack_order say how it is drawn. A line with no live campaign yet can have a blank
+#    campaign_id (TikTok Web did, before it launched). For a DTC line also set
+#    spend_type (prospecting / mixed / brand / nonbrand) so it appears in the Gross
+#    Sales vs Spend charts; leave it blank to keep it out (GMV Max is blank).
+python3 scripts/gen_budget_map_macro.py
+python3 scripts/build_sheet_cards.py
+dbt run --select budget_pacing dtc_sales_vs_spend
+```
+
+If a budget line reaches the table without a mapping row, `assert_budget_lines_mapped`
+fails — the chart would otherwise draw it with no colour and no label.
+
+`seeds/budget_campaign_map.csv` is **not** `campaign_segments.csv`. Segments are the
+client's reporting definition; mapping Lead Gen there would have moved $838 of
+September spend into "Meta Overall" and "Paid DTC Overall" and changed numbers the
+client already received.
+
+## Known limits
+
+- **Sale labels and the numbered markers** on the doc's October charts (Prime Day,
+  Free Shipping, ①②③) are drawn by hand and are not part of these charts.
+- **A stale feed** shows older numbers until the next refresh; "Actuals through" is the
+  tell. A failed pacing refresh is toasted but does not stop the rest of the report.
+- **Platform freshness is per platform.** A platform that syncs late shows forecast
+  colour for the days it is missing while the others show grey.
+
+
+---
+
+# Gross Sales vs Spend
+
+One more tab, **Gross Sales vs Spend**, month to date, standing in for the two Shopify
+charts in the weekly doc. Each doc chart becomes two native charts that share the same
+days, in the doc's colours:
+
+| Doc chart | Here |
+|---|---|
+| Gross Sales vs. paid spend | **Gross Sales** (new vs returning customers) and **Paid Spend** (Meta / Google / TikTok) |
+| Spend by type vs. new customers | **New Customers** and **Paid Spend** by type (Prospecting / Mixed / Brand / Nonbrand) |
+
+**Why two charts per doc chart.** The doc draws sales and spend as *pairs of stacked bars*
+per day on two axes ($60K of sales beside $5K of spend). Google Sheets has no such chart:
+a combo chart cannot place two stacks side by side. So sales sit above and spend below,
+sharing the days. Nothing in the data changes; the comparison is across two charts instead
+of within one. This has not been tried in the real sheet, only reasoned about.
+
+**Month to date, on purpose.** The doc's version was a hand-picked 10 days (9/18–9/27),
+split "Pre / Post Spend Adjustment" around one decision on 9/23. That was a one-off, so
+the tab shows the month so far, through the last complete day. It follows the data (on the
+1st it still shows the month that just closed) and cell B2 overrides the month. There is no
+event-date feature, because how this chart evolves is not known yet.
+
+Data path: `reporting.josiemaran_shopify_sales_by_segment` + `blended_performance` →
+dbt `dtc_sales_vs_spend` → Metabase card `metabase/03_dtc_sales_vs_spend.sql` → feed tab
+`dtc sales vs spend @ <id>` → `build_sales_tab.gs`.
+
+## Deploying
+
+```bash
+/home/ubuntu/.dbt-venv/bin/dbt run  --target josiemaran --select dtc_sales_vs_spend
+/home/ubuntu/.dbt-venv/bin/dbt test --target josiemaran --select dtc_sales_vs_spend assert_dtc_spend_is_classified assert_dtc_sales_vs_spend_ties_to_sources
+```
+
+Built and tested 2026-10-07. The Metabase question is created: **57544**, "JM – DTC Sales vs
+Spend", in collection 4503. Add `scripts/build_sales_tab.gs` as a **third file** in the Apps
+Script project **next to** `build_pacing_tabs.gs` (it needs that file's helpers).
+`SALES_CARD_ID` is already set to 57544 (at `0` the tab is simply skipped). Then run
+`refreshAndRebuild`.
+
+## Keeping the tables fresh
+
+`budget_pacing` and `dtc_sales_vs_spend` are dbt tables, so they are only as current as the
+last `dbt run` that built them. Nothing on this box schedules dbt for Josie Maran (only Erie
+has a cron-run dbt), so **confirm that whatever runs the daily dbt job builds these two**. If
+that job selects models explicitly, add them after `blended_performance`. If it does not,
+the actuals on the charts stop moving, with no error. The loader that fills
+`gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so dbt should run after it.
+
+## What is counted, and why it differs from the DTC WoW report
+
+- **Lead Gen is included**, as Prospecting. The doc's Meta bar and Prospecting bar include
+  it (2026-09-27: $2,215 Meta Overall + $404 Lead Gen = $2,619; the chart reads ~$2,625).
+  `campaign_segments.csv` leaves Lead Gen unmapped, so the DTC WoW report's "Paid DTC
+  Overall" excludes it and **the two will not agree on Meta spend**. That is a gap in the
+  existing report's definition, not something these charts introduce.
+- **TikTok GMV Max is excluded.** Its revenue is TikTok Shop GMV, which never reaches
+  Shopify; these charts compare spend with Shopify sales.
+- **TikTok spend** shows only once a TikTok line with a `spend_type` (TikTok Web) has spend.
+  A series that is blank or zero all month is dropped.
+- **TikTok's light blue is not sampled** from the doc (there are no TikTok bars in it to
+  sample); it reuses the light blue of the pacing charts.
+- **Spend is blank, not 0, on a day a platform has not synced.** Sales still show.
+
+## If a test fails
+
+- `assert_dtc_spend_is_classified`: a DTC campaign is in `campaign_segments.csv` but not in
+  `budget_campaign_map.csv`, so its spend would vanish from these charts. Add it there.
+- `assert_dtc_sales_vs_spend_ties_to_sources`: the model dropped or duplicated something, or
+  the platform and type cuts disagree (a campaign with a platform but no `spend_type`).

@@ -1,0 +1,32 @@
+version: 2
+
+models:
+
+  - name: dtc_sales_vs_spend
+    description: >
+      One row per complete day: Shopify gross sales split into new-customer and
+      returning-customer, new customers, and DTC paid spend cut by platform and by
+      type. Feeds the Gsheet "Gross Sales vs Spend" charts. Spend is NULL (not 0) on
+      a day a platform has not synced. Lead Gen counts as Prospecting here although
+      campaign_segments.csv leaves it unmapped; TikTok GMV Max is excluded.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+    columns:
+      - name: date
+        tests: [not_null]
+      - name: month_start
+        tests: [not_null]
+      - name: new_customer_gross_sales
+        description: Gross sales from customers' first orders, all markets and order types.
+      - name: returning_customer_gross_sales
+        description: Gross sales from repeat orders.
+      - name: spend_prospecting
+        description: Meta Prospecting Adv+ plus Lead Gen.
+      - name: spend_mixed
+        description: Meta Retargeting (OG ASC), the legacy retargeting and reactivation campaign.
+      - name: spend_brand
+        description: Google US PMax Branded, US Branded Search and CA Branded Search.
+      - name: spend_nonbrand
+        description: Google NB PMax.
