@@ -314,6 +314,8 @@ def sales_rows(days=6, month="2026-10-01", tiktok=None, google_gap_on_last=False
 
 
 class SalesTab(unittest.TestCase):
+    TAB = "Gross Sales vs Spend"
+
     @classmethod
     def setUpClass(cls):
         cls.ctx = MiniRacer()
@@ -329,79 +331,126 @@ class SalesTab(unittest.TestCase):
         self.ctx.eval(f"buildSalesTab_({name});")
         return name
 
-    def test_four_charts_with_the_right_titles_and_stacking(self):
-        v = self.build(sales_rows())
-        charts = self.js(f"{v}.sheets['Gross Sales vs Spend'].charts")
-        self.assertEqual({c["opts"]["title"]: c["stacked"] for c in charts}, {
-            "Gross Sales — new vs returning customers": True,
-            "Paid Spend — Meta, Google, TikTok": True,
-            "New Customers": False,
-            "Paid Spend — by type": True})
+    def charts(self, v):
+        return {c["opts"]["title"]: c for c in self.js(f"{v}.sheets['{self.TAB}'].charts")}
 
-    def test_doc_colours_and_stack_order(self):
-        v = self.build(sales_rows())
-        by = {c["opts"]["title"]: [s["color"] for _, s in sorted(c["opts"]["series"].items(), key=lambda kv: int(kv[0]))]
-              for c in self.js(f"{v}.sheets['Gross Sales vs Spend'].charts")}
-        self.assertEqual(by["Gross Sales — new vs returning customers"], ["#D98C00", "#1CB07A"])
-        self.assertEqual(by["Paid Spend — by type"], ["#EB6835", "#4B3AA7", "#3C78D8", "#9DC0EF"])
-        self.assertEqual(by["New Customers"], ["#908B82"])
+    @staticmethod
+    def series(chart):
+        return [(s["targetAxisIndex"], s["color"])
+                for _, s in sorted(chart["opts"]["series"].items(), key=lambda kv: int(kv[0]))]
 
-    def test_a_series_that_is_blank_all_month_is_dropped_and_returns_when_it_has_spend(self):
+    def test_two_charts_with_the_docs_titles_both_stacked(self):
+        ch = self.charts(self.build(sales_rows()))
+        self.assertEqual(set(ch), {"Gross Sales vs. paid spend", "Spend by type vs. new customers"})
+        for c in ch.values():
+            self.assertTrue(c["stacked"])
+            self.assertTrue(c["opts"]["isStacked"])
+
+    def test_sales_on_the_left_axis_spend_on_the_right_in_the_docs_colours(self):
+        ch = self.charts(self.build(sales_rows()))
+        self.assertEqual(self.series(ch["Gross Sales vs. paid spend"]),     # TikTok is blank all month: dropped
+                         [(0, "#D98C00"), (0, "#1CB07A"), (1, "#172A7B"), (1, "#3C78D8")])
+        self.assertEqual(self.series(ch["Spend by type vs. new customers"]),
+                         [(0, "#908B82"), (1, "#EB6835"), (1, "#4B3AA7"), (1, "#3C78D8"), (1, "#9DC0EF")])
+
+    def test_tiktok_spend_joins_the_right_axis_once_it_has_spend(self):
+        ch = self.charts(self.build(sales_rows(tiktok=120.0)))
+        self.assertEqual(self.series(ch["Gross Sales vs. paid spend"])[-1], (1, "#A4C2F4"))
+        self.assertEqual(len(self.series(ch["Gross Sales vs. paid spend"])), 5)
+
+    def test_the_nice_maximum_reproduces_the_docs_own_axes(self):
+        for value, want in ((54545, 60000), (4540, 5000), (133, 160), (85257, 100000), (0, 4)):
+            self.assertEqual(self.js(f"salesNiceMax_({value}, 4)"), want, value)
+
+    def test_both_axes_get_a_maximum_and_the_same_gridline_count(self):
+        ch = self.charts(self.build(sales_rows()))["Gross Sales vs. paid spend"]
+        v = ch["opts"]["vAxes"]
+        self.assertEqual(v["0"]["viewWindow"], {"min": 0, "max": 32000})       # tallest sales stack ~30,012
+        self.assertEqual(v["1"]["viewWindow"], {"min": 0, "max": 4000})        # tallest spend stack ~3,312
+        self.assertEqual(v["0"]["gridlines"], {"count": 5})
+        self.assertEqual(v["1"]["gridlines"], {"count": 5})
+        self.assertEqual((v["0"]["title"], v["1"]["title"]), ("Gross Sales", "Paid spend"))
+
+    def test_an_axis_with_no_series_is_not_configured(self):
+        rows = sales_rows()
+        for r in rows:
+            r[6] = r[7] = r[8] = r[9] = r[10] = r[11] = r[12] = ""          # no spend at all
+        ch = self.charts(self.build(rows))["Gross Sales vs. paid spend"]
+        self.assertEqual(sorted(ch["opts"]["vAxes"]), ["0"])
+
+    def test_day_labels_read_like_the_docs_and_stay_text(self):
         v = self.build(sales_rows())
-        spend = [c for c in self.js(f"{v}.sheets['Gross Sales vs Spend'].charts") if c["opts"]["title"].startswith("Paid Spend — Meta")][0]
-        self.assertEqual(len(spend["opts"]["series"]), 2)                    # TikTok dropped
-        v2 = self.build(sales_rows(tiktok=120.0), name="v2")                 # TikTok Web has launched
-        spend2 = [c for c in self.js(f"{v2}.sheets['Gross Sales vs Spend'].charts") if c["opts"]["title"].startswith("Paid Spend — Meta")][0]
-        self.assertEqual(len(spend2["opts"]["series"]), 3)
+        cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
+        top = 5
+        self.assertEqual(cells[f"{top + 4},1"]["v"], "Oct 1")
+        self.assertEqual(cells[f"{top + 9},1"]["v"], "Oct 6")
+        self.assertEqual(cells[f"{top + 4},1"]["nf"], "@")             # text, so the axis stays discrete
+
+    def test_money_columns_are_dollars_and_customers_a_count(self):
+        v = self.build(sales_rows())
+        cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
+        self.assertEqual(cells["9,2"]["nf"], "$#,##0")                  # block 1: sales
+        self.assertEqual(cells["47,2"]["nf"], "#,##0")                  # block 2: new customers
+        self.assertEqual(cells["47,3"]["nf"], "$#,##0")                 # block 2: spend
 
     def test_month_to_date_has_only_the_days_in_the_feed(self):
         v = self.build(sales_rows(days=6))
-        cells = self.js(f"{v}.sheets['Gross Sales vs Spend'].cells")
-        top = 5
-        self.assertEqual(cells[f"{top + 4},1"]["v"], "10/1")
-        self.assertEqual(cells[f"{top + 9},1"]["v"], "10/6")
-        self.assertNotIn(f"{top + 10},1", cells)                              # no 10/7 row
-        chart = self.js(f"{v}.sheets['Gross Sales vs Spend'].charts[0]")
-        self.assertEqual(chart["ranges"][0][2], 1 + 6)                         # header + 6 days
-        self.assertEqual(cells["2,6"]["v"], "2026-10-06")                      # data through
+        cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
+        self.assertNotIn("15,1", cells)                                  # no seventh day in block 1
+        chart = self.charts(v)["Gross Sales vs. paid spend"]
+        self.assertEqual(chart["ranges"][0][2], 1 + 6)                   # header + 6 days
+        self.assertEqual(chart["pos"], [5, 1 + 4 + 2])                   # beside its own table
+        self.assertEqual(cells["2,6"]["v"], "2026-10-06")                # data through
 
     def test_a_platform_that_has_not_synced_is_a_gap_not_a_zero(self):
         v = self.build(sales_rows(days=3, google_gap_on_last=True))
-        cells = self.js(f"{v}.sheets['Gross Sales vs Spend'].cells")
-        top = 5 + 38                                                         # the spend-by-platform block
-        self.assertEqual(cells[f"{top + 6},3"]["v"], "")                       # Google on 10/3: blank
-        self.assertIsInstance(cells[f"{top + 6},2"]["v"], (int, float))        # Meta on 10/3: a number
+        cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
+        self.assertEqual(cells["11,5"]["v"], "")                         # Google on day 3: blank
+        self.assertIsInstance(cells["11,4"]["v"], (int, float))          # Meta on day 3: a number
 
-    def test_summary_is_a_live_formula(self):
+    def test_summaries_are_live_formulas_over_each_charts_own_table(self):
         v = self.build(sales_rows())
-        cells = self.js(f"{v}.sheets['Gross Sales vs Spend'].cells")
-        f = cells["6,1"]["f"]
-        self.assertTrue(f.startswith('="Month to date: "&TEXT(SUM(B9:C14)'), f)
-        self.assertIn("from new customers", f)
+        cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
+        f1, f2 = cells["6,1"]["f"], cells["44,1"]["f"]
+        self.assertTrue(f1.startswith('="Month to date: "&TEXT(SUM(B9:C14),"$#,##0")'), f1)
+        self.assertIn("from new customers", f1)
+        self.assertIn("SUM(D9:E14)", f1)                                 # Meta + Google, TikTok dropped
+        self.assertTrue(f2.startswith('="Month to date: "&TEXT(SUM(B47:B52),"#,##0")'), f2)
+        self.assertIn("SUM(C47:F52)", f2)
 
     def test_month_follows_the_data_and_an_unknown_override_is_ignored(self):
         v = self.build(sales_rows(days=3, month="2026-09-01") + sales_rows(days=6, month="2026-10-01"))
-        self.assertEqual(self.js(f"{v}.sheets['Gross Sales vs Spend'].cells['2,4'].v"), "October 2026")
-        self.ctx.eval(f"{v}.sheets['Gross Sales vs Spend'].getRange(2, 2).setValue('2026-09-01'); buildSalesTab_({v});")
-        self.assertEqual(self.js(f"{v}.sheets['Gross Sales vs Spend'].cells['2,4'].v"), "September 2026")
-        self.ctx.eval(f"{v}.sheets['Gross Sales vs Spend'].getRange(2, 2).setValue('2030-01-01'); buildSalesTab_({v});")
-        self.assertIn("ignored", self.js(f"{v}.sheets['Gross Sales vs Spend'].cells['3,1'].v"))
+        self.assertEqual(self.js(f"{v}.sheets['{self.TAB}'].cells['2,4'].v"), "October 2026")
+        self.ctx.eval(f"{v}.sheets['{self.TAB}'].getRange(2, 2).setValue('2026-09-01'); buildSalesTab_({v});")
+        self.assertEqual(self.js(f"{v}.sheets['{self.TAB}'].cells['2,4'].v"), "September 2026")
+        self.ctx.eval(f"{v}.sheets['{self.TAB}'].getRange(2, 2).setValue('2030-01-01'); buildSalesTab_({v});")
+        self.assertIn("ignored", self.js(f"{v}.sheets['{self.TAB}'].cells['3,1'].v"))
 
     def test_rebuild_edits_in_place_without_duplicating_charts(self):
         v = self.build(sales_rows())
-        ids = sorted(self.js(f"{v}.sheets['Gross Sales vs Spend'].charts.map(function (c) {{ return c.id; }})"))
+        ids = sorted(c["id"] for c in self.charts(v).values())
         self.ctx.eval(f"buildSalesTab_({v});")
-        again = sorted(self.js(f"{v}.sheets['Gross Sales vs Spend'].charts.map(function (c) {{ return c.id; }})"))
-        self.assertEqual(ids, again)
+        self.assertEqual(sorted(c["id"] for c in self.charts(v).values()), ids)
+
+    def test_the_four_charts_of_the_earlier_version_are_removed_but_a_foreign_chart_is_not(self):
+        v = self.build(sales_rows())
+        self.ctx.eval(f"""
+          var sh = {v}.sheets['{self.TAB}'];
+          ['Gross Sales — new vs returning customers', 'Paid Spend — Meta, Google, TikTok', 'New Customers',
+           'Paid Spend — by type', 'Someone typed this'].forEach(function (t) {{
+            sh.insertChart(chartOf({{opts: {{title: t}}, ranges: [], stacked: true}})); }});
+          buildSalesTab_({v});""")
+        self.assertEqual(sorted(self.charts(v)),
+                         ["Gross Sales vs. paid spend", "Someone typed this", "Spend by type vs. new customers"])
 
     def test_a_failure_is_written_into_the_tab_and_does_not_throw(self):
         self.ctx.eval("var bad = makeSpreadsheet('dtc sales vs spend @ 98', [['date'], ['2026-10-01']]); buildSalesTab_(bad);")
-        self.assertTrue(self.js("bad.sheets['Gross Sales vs Spend'].cells['3,1'].v").startswith("⚠ Build failed"))
+        self.assertTrue(self.js(f"bad.sheets['{self.TAB}'].cells['3,1'].v").startswith("⚠ Build failed"))
 
     def test_without_the_pacing_file_it_says_so_plainly(self):
         ctx = MiniRacer(); ctx.eval(with_id(SALES_GS, "SALES_CARD_ID", 98)); ctx.eval(PRELUDE)
         ctx.eval(f"var w = makeSpreadsheet('dtc sales vs spend @ 98', {json.dumps([SALES_COLS] + sales_rows())}); buildSalesTab_(w);")
-        msg = json.loads(ctx.eval("JSON.stringify(w.sheets['Gross Sales vs Spend'].cells['3,1'].v)"))
+        msg = json.loads(ctx.eval(f"JSON.stringify(w.sheets['{self.TAB}'].cells['3,1'].v)"))
         self.assertIn("build_pacing_tabs.gs", msg)
 
     def test_disabled_until_a_card_id_is_set(self):

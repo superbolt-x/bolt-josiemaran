@@ -421,20 +421,35 @@ client already received.
 
 # Gross Sales vs Spend
 
-One more tab, **Gross Sales vs Spend**, month to date, standing in for the two Shopify
-charts in the weekly doc. Each doc chart becomes two native charts that share the same
-days, in the doc's colours:
+One more tab, **Gross Sales vs Spend**, month to date, with the weekly doc's two Shopify
+charts, one chart each, drawn as the doc draws them (a stack beside a stack for every day):
 
-| Doc chart | Here |
-|---|---|
-| Gross Sales vs. paid spend | **Gross Sales** (new vs returning customers) and **Paid Spend** (Meta / Google / TikTok) |
-| Spend by type vs. new customers | **New Customers** and **Paid Spend** by type (Prospecting / Mixed / Brand / Nonbrand) |
+| Chart | Left axis | Right axis |
+|---|---|---|
+| **Gross Sales vs. paid spend** | New-customer + returning-customer gross sales (stacked) | Meta + Google + TikTok spend (stacked) |
+| **Spend by type vs. new customers** | New customers (one column) | Prospecting + Mixed + Brand + Nonbrand spend (stacked) |
 
-**Why two charts per doc chart.** The doc draws sales and spend as *pairs of stacked bars*
-per day on two axes ($60K of sales beside $5K of spend). Google Sheets has no such chart:
-a combo chart cannot place two stacks side by side. So sales sit above and spend below,
-sharing the days. Nothing in the data changes; the comparison is across two charts instead
-of within one. This has not been tried in the real sheet, only reasoned about.
+**How the pairs are drawn.** In a *stacked* column chart, series assigned to different axes are
+drawn as separate stacks **side by side inside each day**, with the label centred under the pair.
+The table is one row per day; some columns are on the left axis, the rest on the right. No
+interleaving or other trick is needed.
+
+**This was first built wrong, on an untested belief.** The first version said Sheets could not
+draw this and split each doc chart into two charts. That had never been tried. A throwaway spike
+on the live sheet (5 variants, from the real 9/18–9/27 data, rendered via a PDF export and
+compared with the doc) showed the plain layout already gives the doc's chart, and also that:
+
+- **Explicit axis ranges and a gridline count are honoured.** Each axis gets a "nice" maximum
+  from its own tallest stack (`salesNiceMax_`), with the same five gridlines on both, so they
+  line up as the doc's do: $0/$15K/$30K/$45K/$60K against $0/$1.25K/$2.5K/$3.75K/$5K.
+  Left alone, the two axes pick unrelated scales and the gridlines do not align.
+- **Axis labels follow the cells' number format**, so customers are a count and the rest are
+  dollars with no decimals.
+- **A series that is blank all month is dropped by Google itself** (TikTok today).
+- **Not honoured: `visibleInLegend`** (see the pacing section). It is not used here.
+
+**Density.** At month end that is 31 pairs, which is why the charts are 1,100px wide; today's
+6 days look sparse by comparison. The day label sits centred under each pair, as in the doc.
 
 **Month to date, on purpose.** The doc's version was a hand-picked 10 days (9/18–9/27),
 split "Pre / Post Spend Adjustment" around one decision on 9/23. That was a one-off, so
@@ -478,7 +493,7 @@ the actuals on the charts stop moving, with no error. The loader that fills
 - **TikTok GMV Max is excluded.** Its revenue is TikTok Shop GMV, which never reaches
   Shopify; these charts compare spend with Shopify sales.
 - **TikTok spend** shows only once a TikTok line with a `spend_type` (TikTok Web) has spend.
-  A series that is blank or zero all month is dropped.
+  A series that is blank or zero all month is dropped, and its axis stays configured by what is left.
 - **TikTok's light blue is not sampled** from the doc (there are no TikTok bars in it to
   sample); it reuses the light blue of the pacing charts.
 - **Spend is blank, not 0, on a day a platform has not synced.** Sales still show.
