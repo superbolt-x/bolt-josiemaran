@@ -476,12 +476,46 @@ Script project **next to** `build_pacing_tabs.gs` (it needs that file's helpers)
 
 ## Keeping the tables fresh
 
-`budget_pacing` and `dtc_sales_vs_spend` are dbt tables, so they are only as current as the
-last `dbt run` that built them. Nothing on this box schedules dbt for Josie Maran (only Erie
-has a cron-run dbt), so **confirm that whatever runs the daily dbt job builds these two**. If
-that job selects models explicitly, add them after `blended_performance`. If it does not,
-the actuals on the charts stop moving, with no error. The loader that fills
-`gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so dbt should run after it.
+`budget_pacing` and `dtc_sales_vs_spend` are dbt tables, so they are only as current as the last
+dbt run that built them.
+
+**dbt for Josie Maran runs in Fivetran Transformations (dbt Core)**: project `swooned_plaza`, repo
+`bolt-josiemaran`, branch `main`. Its jobs are all `INTEGRATED`: each runs right after specific
+connectors finish syncing, which works out to roughly every four hours.
+
+**The existing jobs run SELECTED models, not the whole project, so a new model is not built until
+it is added to a job.** Checked 2026-10-07: the 16:05 UTC run rebuilt `blended_performance` and
+`shopify_sales_by_segment` but not the two new models, which kept their manual build from 13:21.
+Remember this whenever a model is added to the repo.
+
+**Job `confirm_pogo`, "JM budget pacing + sales vs spend (after blended_performance)"** builds them:
+
+- Schedule: `INTEGRATED` after the job `legged_earplugs`, the one that rebuilds `blended_performance`
+  (the table was rebuilt at 12:06:43 inside that job's 12:05:33-12:06:57 run). So the two models are
+  rebuilt right after `blended_performance`, every cycle, and the sheet never sits a day behind.
+- Steps: `dbt run --select budget_pacing dtc_sales_vs_spend`, then `dbt test --select` on both models
+  and their four singular tests. A failing test fails the job.
+- First run 2026-10-07 16:11 UTC (triggered by hand): SUCCEEDED in 2m34s, both tables rebuilt by Fivetran.
+- It was created through the API, so **it exists only in Fivetran, not in this repo**. To change it:
+  Fivetran, Transformations, josiemaran. To add another model, add it to the `--select` of the run
+  step (and any test of it to the test step).
+
+To check that a job built a table, compare its build time (dbt swaps the table in, so creation time
+is the last build):
+
+```sql
+select relname, relcreationtime from pg_class_info
+where relnamespace = (select oid from pg_namespace where nspname = 'reporting') and relkind = 'r'
+  and relname in ('josiemaran_budget_pacing', 'josiemaran_dtc_sales_vs_spend', 'josiemaran_blended_performance');
+```
+
+**Failure alerting is a gap.** A failed job shows in Fivetran, but nothing posts it to Slack:
+`fivetran/fivetran_transformations_alert.py` reads the legacy `/v1/dbt/projects` API, which does not
+list this project (it returns 404), and neither it nor `fivetran_slack_alerts.py` is scheduled in the
+crontab. The budget loader, by contrast, alerts `#data-script-errors` itself.
+
+The loader that fills `gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so a budget edit
+reaches `budget_pacing` at the first cycle after that.
 
 ## What is counted, and why it differs from the DTC WoW report
 
