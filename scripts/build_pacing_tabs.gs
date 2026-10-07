@@ -49,8 +49,8 @@
  * position, so a typed override can be read back before the tab is rebuilt.
  */
 
-var PACING_CARD_ID = 0;   // Metabase question built from metabase/02_budget_pacing.sql.
-                          // 0 = not wired up yet: these tabs are skipped, nothing else is affected.
+var PACING_CARD_ID = 57543;   // "JM – Budget Pacing", built from metabase/02_budget_pacing.sql.
+                              // 0 = not wired up: these tabs are skipped, nothing else is affected.
 
 function pacingFeedName_() { return 'budget pacing @ ' + PACING_CARD_ID; }
 

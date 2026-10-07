@@ -18,7 +18,7 @@ What the mock is strict about, because real Apps Script is:
 What it cannot tell you: how Google actually renders the chart. The first run in
 the real sheet still has to be looked at.
 """
-import json, pathlib, sys, unittest
+import json, pathlib, re, sys, unittest
 
 try:
     from py_mini_racer import MiniRacer
@@ -29,6 +29,13 @@ except ImportError:
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GS = (ROOT / "scripts" / "build_pacing_tabs.gs").read_text()
 SALES_GS = (ROOT / "scripts" / "build_sales_tab.gs").read_text()
+
+
+def with_id(src, name, value):
+    """Pin a card id constant, whatever real id is committed in the .gs file."""
+    out, n = re.subn(rf"var {name} = \d+;", f"var {name} = {value};", src)
+    assert n == 1, f"{name} not found exactly once"
+    return out
 
 PRELUDE = r"""
 var Logger = { log: function () {} };
@@ -132,7 +139,7 @@ class PacingTabs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.ctx = MiniRacer()
-        cls.ctx.eval(GS.replace("var PACING_CARD_ID = 0;", "var PACING_CARD_ID = 99;"))
+        cls.ctx.eval(with_id(GS, "PACING_CARD_ID", 99))
         cls.ctx.eval(PRELUDE)
 
     def js(self, expr):
@@ -265,7 +272,7 @@ class PacingTabs(unittest.TestCase):
         self.assertTrue(msg.startswith("⚠ Build failed"), msg)
 
     def test_disabled_until_a_card_id_is_set(self):
-        ctx = MiniRacer(); ctx.eval(GS); ctx.eval(PRELUDE)         # PACING_CARD_ID left at 0
+        ctx = MiniRacer(); ctx.eval(with_id(GS, "PACING_CARD_ID", 0)); ctx.eval(PRELUDE)
         ctx.eval("var s0 = makeSpreadsheet('budget pacing @ 0', [['date']]); buildPacingTabs_(s0);")
         self.assertEqual(json.loads(ctx.eval("JSON.stringify(Object.keys(s0.sheets))")), ["budget pacing @ 0"])
 
@@ -291,8 +298,8 @@ class SalesTab(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.ctx = MiniRacer()
-        cls.ctx.eval(GS.replace("var PACING_CARD_ID = 0;", "var PACING_CARD_ID = 99;"))
-        cls.ctx.eval(SALES_GS.replace("var SALES_CARD_ID = 0;", "var SALES_CARD_ID = 98;"))
+        cls.ctx.eval(with_id(GS, "PACING_CARD_ID", 99))
+        cls.ctx.eval(with_id(SALES_GS, "SALES_CARD_ID", 98))
         cls.ctx.eval(PRELUDE)
 
     def js(self, expr):
@@ -373,13 +380,13 @@ class SalesTab(unittest.TestCase):
         self.assertTrue(self.js("bad.sheets['Gross Sales vs Spend'].cells['3,1'].v").startswith("⚠ Build failed"))
 
     def test_without_the_pacing_file_it_says_so_plainly(self):
-        ctx = MiniRacer(); ctx.eval(SALES_GS.replace("var SALES_CARD_ID = 0;", "var SALES_CARD_ID = 98;")); ctx.eval(PRELUDE)
+        ctx = MiniRacer(); ctx.eval(with_id(SALES_GS, "SALES_CARD_ID", 98)); ctx.eval(PRELUDE)
         ctx.eval(f"var w = makeSpreadsheet('dtc sales vs spend @ 98', {json.dumps([SALES_COLS] + sales_rows())}); buildSalesTab_(w);")
         msg = json.loads(ctx.eval("JSON.stringify(w.sheets['Gross Sales vs Spend'].cells['3,1'].v)"))
         self.assertIn("build_pacing_tabs.gs", msg)
 
     def test_disabled_until_a_card_id_is_set(self):
-        ctx = MiniRacer(); ctx.eval(GS); ctx.eval(SALES_GS); ctx.eval(PRELUDE)
+        ctx = MiniRacer(); ctx.eval(with_id(GS, "PACING_CARD_ID", 0)); ctx.eval(with_id(SALES_GS, "SALES_CARD_ID", 0)); ctx.eval(PRELUDE)
         ctx.eval("var s0 = makeSpreadsheet('dtc sales vs spend @ 0', [['date']]); buildSalesTab_(s0);")
         self.assertEqual(json.loads(ctx.eval("JSON.stringify(Object.keys(s0.sheets))")), ["dtc sales vs spend @ 0"])
 
@@ -418,7 +425,7 @@ class MetabaseRefresh(unittest.TestCase):
             self.ctx.eval("refreshCardFeed_(7, 'feed7', ['date'])")
 
     def test_both_cards_are_off_until_configured(self):
-        ctx = MiniRacer(); ctx.eval(GS); ctx.eval(SALES_GS); ctx.eval(PRELUDE)
+        ctx = MiniRacer(); ctx.eval(with_id(GS, "PACING_CARD_ID", 0)); ctx.eval(with_id(SALES_GS, "SALES_CARD_ID", 0)); ctx.eval(PRELUDE)
         self.assertEqual(json.loads(ctx.eval("JSON.stringify([refreshPacingFeed_(), refreshSalesFeed_()])")), [0, 0])
 
 

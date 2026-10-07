@@ -315,27 +315,30 @@ Metabase card → feed tab → `build_pacing_tabs.gs` draws the charts.
 
 ## Deploying
 
-**1. dbt.** `budget_pacing` reads `blended_performance`, so build in that order.
+**1. dbt.** `budget_pacing` reads `blended_performance`, which must already be built.
+`--target josiemaran` is mandatory (there is no default target, on purpose), and dbt lives
+in its own virtualenv. Built and tested 2026-10-07: 17 of 17 tests pass.
 
 ```bash
-dbt run  --select budget_pacing
-dbt test --select budget_pacing assert_budget_lines_mapped assert_budget_pacing_spend_ties_to_blended
+/home/ubuntu/.dbt-venv/bin/dbt run  --target josiemaran --select budget_pacing
+/home/ubuntu/.dbt-venv/bin/dbt test --target josiemaran --select budget_pacing assert_budget_lines_mapped assert_budget_pacing_spend_ties_to_blended
 ```
 
 `assert_budget_pacing_spend_ties_to_blended` proves the campaign → budget-line join
 neither drops nor duplicates spend. If it fails, do not ship the charts.
 
-**2. Metabase question.** New native question **JM – Budget Pacing**, same collection
-as the feed (4503). Until `dbt run` has built the table, paste
-`metabase/generated/02_budget_pacing_standalone.sql`; afterwards switch it to
-`metabase/02_budget_pacing.sql` and delete the generated file. Note the question id.
-No template tags — which month shows is decided in the sheet.
+**2. Metabase question.** Created: **57543**, "JM – Budget Pacing", in collection 4503
+beside the feed. It runs `metabase/02_budget_pacing.sql` against the dbt table. If that
+SQL changes, update the question to match. No template tags — which month shows is decided
+in the sheet. (`metabase/generated/02_budget_pacing_standalone.sql` is only for wiring the
+card up before dbt has built the table; it is no longer needed.)
 
 **3. Apps Script.** In the existing project add a **second file** and paste
-`scripts/build_pacing_tabs.gs`. Set `PACING_CARD_ID` at the top to the question id.
-(Left at `0` the new tabs are simply skipped and the existing report is unaffected.)
-Run `refreshAndRebuild`; the daily trigger already calls it. If you pull the card
-with the Metabase extension instead, name its tab `budget pacing @ <id>`.
+`scripts/build_pacing_tabs.gs`. `PACING_CARD_ID` is already set to 57543 (at `0` the new
+tabs are simply skipped and the existing report is unaffected). Run `refreshAndRebuild`; the
+daily trigger already calls it. If you pull the card with the Metabase extension instead,
+name its tab `budget pacing @ <id>`. If the API Executable deployment is in use, deploy a new
+version after pasting, or the execution-only grant will keep running the old code.
 
 **4. Look at it once.** `scripts/test_sheet_tabs.py` runs the script in V8 against a
 mock Sheets API, but it cannot show how Google draws the chart. On the first run check:
@@ -425,15 +428,24 @@ dbt `dtc_sales_vs_spend` → Metabase card `metabase/03_dtc_sales_vs_spend.sql` 
 ## Deploying
 
 ```bash
-dbt run  --select dtc_sales_vs_spend
-dbt test --select dtc_sales_vs_spend assert_dtc_spend_is_classified assert_dtc_sales_vs_spend_ties_to_sources
+/home/ubuntu/.dbt-venv/bin/dbt run  --target josiemaran --select dtc_sales_vs_spend
+/home/ubuntu/.dbt-venv/bin/dbt test --target josiemaran --select dtc_sales_vs_spend assert_dtc_spend_is_classified assert_dtc_sales_vs_spend_ties_to_sources
 ```
 
-Then, exactly as for the pacing card: create the Metabase question **JM – DTC Sales vs
-Spend** (use `metabase/generated/03_dtc_sales_vs_spend_standalone.sql` until dbt has built the
-table), add `scripts/build_sales_tab.gs` as a **third file** in the Apps Script project
-**next to** `build_pacing_tabs.gs` (it needs that file's helpers), set `SALES_CARD_ID`, and
-run `refreshAndRebuild`. Left at `0` the tab is simply skipped.
+Built and tested 2026-10-07. The Metabase question is created: **57544**, "JM – DTC Sales vs
+Spend", in collection 4503. Add `scripts/build_sales_tab.gs` as a **third file** in the Apps
+Script project **next to** `build_pacing_tabs.gs` (it needs that file's helpers).
+`SALES_CARD_ID` is already set to 57544 (at `0` the tab is simply skipped). Then run
+`refreshAndRebuild`.
+
+## Keeping the tables fresh
+
+`budget_pacing` and `dtc_sales_vs_spend` are dbt tables, so they are only as current as the
+last `dbt run` that built them. Nothing on this box schedules dbt for Josie Maran (only Erie
+has a cron-run dbt), so **confirm that whatever runs the daily dbt job builds these two**. If
+that job selects models explicitly, add them after `blended_performance`. If it does not,
+the actuals on the charts stop moving, with no error. The loader that fills
+`gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so dbt should run after it.
 
 ## What is counted, and why it differs from the DTC WoW report
 

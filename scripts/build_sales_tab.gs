@@ -48,8 +48,8 @@
  *    a chart's identity, and the chart is edited in place so a linked Doc survives.
  */
 
-var SALES_CARD_ID = 0;   // Metabase question built from metabase/03_dtc_sales_vs_spend.sql.
-                         // 0 = not wired up yet: this tab is skipped, nothing else is affected.
+var SALES_CARD_ID = 57544;   // "JM – DTC Sales vs Spend", built from metabase/03_dtc_sales_vs_spend.sql.
+                             // 0 = not wired up: this tab is skipped, nothing else is affected.
 
 function salesFeedName_() { return 'dtc sales vs spend @ ' + SALES_CARD_ID; }
 
