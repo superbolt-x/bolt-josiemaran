@@ -253,6 +253,10 @@ function buildReport() {
   buildCampaigns_(ss);
   buildHealth_(ss);
   upsertPendingCharts_();
+  // Budget Pacing / DoD Budgets live in build_pacing_tabs.gs. That file is
+  // optional: if it is not in this project the report is exactly what it was
+  // before, and buildPacingTabs_ never throws (it writes a failure into its tab).
+  if (typeof buildPacingTabs_ === 'function') buildPacingTabs_(ss);
   orderTabs_(ss);
   ss.toast('Rebuilt. Feed tab expected: "' + FEED + '"', 'Done', 8);
 }
@@ -816,6 +820,14 @@ function writeReadme_(ss) {
     ['A1 range — so changing a metric list shifts every block below it and the'],
     ['slide then points at the wrong rows. Re-link after any layout change.'],
     [''],
+    ['BUDGET PACING AND DOD BUDGETS (scripts/build_pacing_tabs.gs, a second file in this'],
+    ['project). Budget Pacing: grey = actual spend, colour = remaining forecast budget'],
+    ['from the client sheet. DoD Budgets: the planned spend per day. Colours, order and'],
+    ['legend labels come from the feed (seeds/budget_campaign_map.csv), not this script.'],
+    ['The monthly budget is the SUM of the daily budgets; type a figure into a block\'s'],
+    ['"Budget override" cell to quote a nominal one instead. Do not use the client'],
+    ['sheet\'s own Total Budget row: it leaves out NB PMax.'],
+    [''],
     ['TO REBUILD: Extensions -> Apps Script -> Save -> Run buildReport. Metric sets'],
     ['live in SHAPES, slides in TABS, colours in C.']
   ];
@@ -834,7 +846,7 @@ function writeReadme_(ss) {
 
 function orderTabs_(ss) {
   ['README','Health','DTC WoW','MTD','Sephora Traffic WoW','Sephora Collab WoW',
-   'MTD Sephora','GA4 Channels','Site','Campaigns', FEED].forEach(function (n, i) {
+   'MTD Sephora','GA4 Channels','Site','Campaigns','Budget Pacing','DoD Budgets', FEED].forEach(function (n, i) {
     var sh = ss.getSheetByName(n);
     if (sh) { ss.setActiveSheet(sh); ss.moveActiveSheet(i + 1); }
   });
@@ -941,6 +953,15 @@ function refreshFeed_() {
  */
 function refreshAndRebuild() {
   var n = refreshFeed_();
+  // The pacing card is pulled separately and must never block this report: a
+  // Metabase problem on THAT card is shown, not allowed to stop the rebuild.
+  if (typeof refreshPacingFeed_ === 'function') {
+    try { refreshPacingFeed_(); }
+    catch (e) {
+      Logger.log('Pacing feed refresh failed: ' + e.message);
+      SpreadsheetApp.getActive().toast('Pacing feed NOT refreshed: ' + e.message, 'Budget Pacing', 15);
+    }
+  }
   buildReport();
   SpreadsheetApp.getActive().toast(n + ' feed rows pulled from card ' + CARD_ID, 'Refreshed', 8);
 }
