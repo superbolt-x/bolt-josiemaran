@@ -497,6 +497,13 @@ the actuals on the charts stop moving, with no error. The loader that fills
   (`shopify_performance`) builds both tables together with `--full-refresh`, so the first run after the change applies it to all
   history. `tests/assert_shopify_sales_ties_to_segment.sql` fails if the two disagree again; it is in no Fivetran job's `--select`
   yet, so run `dbt test --select assert_shopify_sales_ties_to_segment` or add a test step to `usurped_dread`.
+- **`shopify_sales_by_segment` reads the order table with `ref()`, so dbt builds the order table first.** It used `source()`, which
+  dbt cannot order: in a `usurped_dread` run the model was built at 19:38:08 and the order table it reads at 19:38:27, so it
+  classified orders first vs repeat from the previous build while `shopify_sales` used the new one. Gross sales and order counts
+  still agreed, but `first_order_gross_sales` / `repeat_order_gross_sales` differed on 44 historical days, and
+  `assert_shopify_sales_ties_to_segment` failed. Rebuilding `shopify_sales_by_segment` from the current order table made the
+  test pass. Side effect of the `ref()`: `+blended_performance` (job `legged_earplugs`) now also rebuilds `shopify_daily_sales_by_order`,
+  `shopify_line_items` and `shopify_orders`, the same three models `usurped_dread` already rebuilds.
   (`metabase/generated/01_reporting_feed_standalone.sql` still has the old filter; that pre-dbt file is unused, and its
   generator, `scripts/build_standalone_feed.py`, already fails on `tiktok_gmv_raw`.)
 

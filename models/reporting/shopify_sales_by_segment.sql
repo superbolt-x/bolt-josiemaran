@@ -24,6 +24,12 @@
     revenue from customers acquired long before the reporting period. Leaving it
     in blended ROAS credits paid media for revenue it did not create this month.
 
+    BUILD ORDER: this model reads the order table with ref(), not source(). With source() dbt did
+    not know the dependency and could build this model BEFORE the order table was rebuilt in the
+    same run, so it classified first vs repeat orders from the previous build while `shopify_sales`
+    (a ref) used the new one: the two disagreed on first_order_gross_sales / repeat_order_gross_sales
+    on 44 historical days (2026-10-11), with gross sales and order counts still equal.
+
     CANCELLED ORDERS ARE INCLUDED, exactly as the packaged `shopify_sales` includes them
     (dbt var canceled_orders: 'included'). That is the definition the team's weekly
     numbers have always used: the 9/30 doc quoted $859.1K for Sep 1-28, and the warehouse
@@ -68,7 +74,7 @@ with orders as (
         coalesce(total_tax, 0)        as total_tax,
         coalesce(shipping_price, 0)   as shipping_price
 
-    from {{ source('reporting', 'josiemaran_shopify_daily_sales_by_order') }}
+    from {{ ref('shopify_daily_sales_by_order') }}
     where date >= '{{ var("shopify_history_floor") }}'
 
 ),
