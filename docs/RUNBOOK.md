@@ -483,6 +483,17 @@ dbt run that built them.
 `bolt-josiemaran`, branch `main`. Its jobs are all `INTEGRATED`: each runs right after specific
 connectors finish syncing, which works out to roughly every four hours.
 
+| Job | Name | Runs after | Builds |
+|---|---|---|---|
+| `usurped_dread` | shopify_performance | the Shopify connector | `+shopify_daily_sales_by_order_line_item +shopify_sales +shopify_sales_by_segment`, `--full-refresh` |
+| `legged_earplugs` | blended_performance | any of the four connectors | `+blended_performance`, `--full-refresh` |
+| `clamshell_oversleep` | facebook_performance | the Meta connector | the Facebook models |
+| `hypotheses_imply` | tiktok_performance | the TikTok connector | the TikTok models |
+| `outboard_mixed` | google_performance | the Google connector | the Google models |
+| `confirm_pogo` | JM budget pacing + sales vs spend | the job `legged_earplugs` | `budget_pacing`, `dtc_sales_vs_spend`, and their tests |
+
+Jobs trigger off connectors, not off each other (only `confirm_pogo` follows another job), so one failing does not stop the rest.
+
 **The existing jobs run SELECTED models, not the whole project, so a new model is not built until
 it is added to a job.** Checked 2026-10-07: the 16:05 UTC run rebuilt `blended_performance` and
 `shopify_sales_by_segment` but not the two new models, which kept their manual build from 13:21.
@@ -509,10 +520,24 @@ where relnamespace = (select oid from pg_namespace where nspname = 'reporting') 
   and relname in ('josiemaran_budget_pacing', 'josiemaran_dtc_sales_vs_spend', 'josiemaran_blended_performance');
 ```
 
-**Failure alerting is a gap.** A failed job shows in Fivetran, but nothing posts it to Slack:
-`fivetran/fivetran_transformations_alert.py` reads the legacy `/v1/dbt/projects` API, which does not
-list this project (it returns 404), and neither it nor `fivetran_slack_alerts.py` is scheduled in the
-crontab. The budget loader, by contrast, alerts `#data-script-errors` itself.
+**Failure alerting.** `josiemaran/fivetran_dbt_job_alert.py` (outside this repo; hourly cron at :07 UTC in `crontab_config`)
+reads `/v1/transformations?project_id=swooned_plaza` and posts to `#data-script-errors`, once per event: a job **FAILED** (and
+later **recovered**), **RUNNING** for over 90 minutes (stuck), or **not started for over 26 hours** (stale). Paused jobs are ignored.
+State is `fivetran_dbt_job_alert_state.json`, the log `fivetran_dbt_job_alert.log`, and `--test-alert` posts one labelled test.
+Tests: `python -m unittest test_fivetran_dbt_job_alert`. A failed job keeps its previous tables. The older
+`fivetran/fivetran_transformations_alert.py` reads the legacy `/v1/dbt/projects` API (404 for this project) and is not scheduled.
+
+**Shipping a change: Fivetran pulls `main` a few minutes AFTER a merge.** A job triggered one minute after PR #9 merged ran the old
+code and still reported SUCCEEDED. Wait about five minutes, run the job, and check that the new column or table exists before
+trusting a green run. To rebuild by hand after a change to the Shopify or blended models, run `usurped_dread`, then
+`legged_earplugs`; `confirm_pogo` follows `legged_earplugs` on its own. `POST https://api.fivetran.com/v1/transformations/<job>/run`
+with body `{}` and the header `Content-Type: application/json` (without it the API answers 415).
+
+**Guard test, pending.** `assert_shopify_sales_ties_to_segment` is meant to run as a second step of `usurped_dread`. Adding it on
+2026-10-11 made the job FAIL and exposed a real race: `shopify_sales_by_segment` read the order table through `source()`, so dbt
+could build it before the order table, and the first vs repeat split differed on 44 historical days. The model now uses `ref()`
+(branch `fix/by-segment-wait-for-order-table`). Once that is merged, add the step (`dbt test --select
+assert_shopify_sales_ties_to_segment`) to `usurped_dread` and run the job once to see it pass. Until then the step is **not** on the job.
 
 The loader that fills `gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so a budget edit
 reaches `budget_pacing` at the first cycle after that.
