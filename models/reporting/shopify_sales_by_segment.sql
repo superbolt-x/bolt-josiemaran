@@ -24,6 +24,18 @@
     revenue from customers acquired long before the reporting period. Leaving it
     in blended ROAS credits paid media for revenue it did not create this month.
 
+    CANCELLED ORDERS ARE INCLUDED, exactly as the packaged `shopify_sales` includes them
+    (dbt var canceled_orders: 'included'). That is the definition the team's weekly
+    numbers have always used: the 9/30 doc quoted $859.1K for Sep 1-28, and the warehouse
+    gives $859,952 counting cancelled orders and $853,986 without them. A cancelled order
+    has no customer_order_index, so it is in gross_sales, orders and the totals but in
+    neither the first-order nor the repeat-order columns, again as in `shopify_sales`:
+        gross_sales = first_order_gross_sales + repeat_order_gross_sales
+                      + cancelled_order_gross_sales
+    Excluding them here (as this model did until 2026-10-11) made it disagree with
+    `shopify_sales` by 0.4-1.1% a month; tests/assert_shopify_sales_ties_to_segment.sql
+    holds the two together.
+
     HISTORY FLOOR: Shopify order history begins 2026-03-25 (see
     var('shopify_history_floor')). Refunds, however, sync from 2016, so the
     unfloored table shows years of orders=0 with large negative net_sales
@@ -46,6 +58,8 @@ with orders as (
         order_id,
         customer_id,
         case when customer_order_index = 1 then 1 else 0 end as is_first_order,
+        case when customer_order_index > 1 then 1 else 0 end as is_repeat_order,
+        case when cancelled_at is not null then 1 else 0 end as is_cancelled,
 
         coalesce(gross_revenue, 0)    as gross_revenue,
         coalesce(subtotal_revenue, 0) as subtotal_revenue,
@@ -56,7 +70,6 @@ with orders as (
 
     from {{ source('reporting', 'josiemaran_shopify_daily_sales_by_order') }}
     where date >= '{{ var("shopify_history_floor") }}'
-      and cancelled_at is null
 
 ),
 
@@ -83,6 +96,8 @@ spine as (
         o.order_id,
         o.customer_id,
         o.is_first_order,
+        o.is_repeat_order,
+        o.is_cancelled,
         o.gross_revenue,
         o.subtotal_revenue,
         o.total_revenue,
@@ -102,7 +117,8 @@ select
 
     count(distinct order_id)                                               as orders,
     count(distinct case when is_first_order = 1 then order_id end)         as first_orders,
-    count(distinct case when is_first_order = 0 then order_id end)         as repeat_orders,
+    count(distinct case when is_repeat_order = 1 then order_id end)        as repeat_orders,
+    count(distinct case when is_cancelled = 1 then order_id end)           as cancelled_orders,
     count(distinct customer_id)                                            as customers,
     count(distinct case when is_first_order = 1 then customer_id end)      as new_customers,
 
@@ -114,7 +130,8 @@ select
     sum(shipping_price)                                                    as shipping,
 
     sum(case when is_first_order = 1 then gross_revenue else 0 end)        as first_order_gross_sales,
-    sum(case when is_first_order = 0 then gross_revenue else 0 end)        as repeat_order_gross_sales,
+    sum(case when is_repeat_order = 1 then gross_revenue else 0 end)       as repeat_order_gross_sales,
+    sum(case when is_cancelled = 1 then gross_revenue else 0 end)          as cancelled_order_gross_sales,
 
     min(order_date)                                                        as min_order_date,
     max(order_date)                                                        as max_order_date,

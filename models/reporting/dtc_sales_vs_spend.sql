@@ -17,6 +17,9 @@
               returning_customer_gross_sales  gross sales from repeat orders
               new_customers             customers placing their first order
               (all markets and order types summed, which is what the doc shows)
+              gross_sales               everything Shopify booked, cancelled orders included
+              The two stacks cover indexed orders only: a cancelled order has no order
+              index, so new + returning sits 0.4-1.1% below gross_sales.
 
     Spend     by platform  spend_meta / spend_google / spend_tiktok
               by type      spend_prospecting / spend_mixed / spend_brand /
