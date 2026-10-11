@@ -485,6 +485,21 @@ the actuals on the charts stop moving, with no error. The loader that fills
 
 ## What is counted, and why it differs from the DTC WoW report
 
+- **Cancelled orders are counted, in `shopify_sales` and `shopify_sales_by_segment` alike** (so in `blended_performance`'s
+  `shopify_*` columns, the weekly deck's site columns and Gross Sales vs Spend). Until 2026-10-11 `shopify_sales_by_segment`
+  dropped them while `shopify_sales` (dbt var `canceled_orders: 'included'`) kept them, so the two disagreed by exactly the
+  cancelled orders' gross: 0.4-1.1% a month from March to October 2026 (September: 56 cancelled orders, $6,227, $1,015,771
+  against $1,009,544). The team's reported revenue counts them: the 9/30 doc's $859.1K for Sep 1-28 is $859,952 with them and
+  $853,986 without. A cancelled order has no `customer_order_index`, so it is in gross sales and orders but in neither the
+  first-order nor the repeat-order columns, in both tables. The chart's new + returning stacks therefore sit slightly below
+  `gross_sales`; `cancelled_order_gross_sales` is the difference, and `gross_sales = first + repeat + cancelled`. Cancellations
+  can arrive up to about a week after the order, so a recent day's gross sales can still change. The Fivetran job `usurped_dread`
+  (`shopify_performance`) builds both tables together with `--full-refresh`, so the first run after the change applies it to all
+  history. `tests/assert_shopify_sales_ties_to_segment.sql` fails if the two disagree again; it is in no Fivetran job's `--select`
+  yet, so run `dbt test --select assert_shopify_sales_ties_to_segment` or add a test step to `usurped_dread`.
+  (`metabase/generated/01_reporting_feed_standalone.sql` still has the old filter; that pre-dbt file is unused, and its
+  generator, `scripts/build_standalone_feed.py`, already fails on `tiktok_gmv_raw`.)
+
 - **Lead Gen is included**, as Prospecting. The doc's Meta bar and Prospecting bar include
   it (2026-09-27: $2,215 Meta Overall + $404 Lead Gen = $2,619; the chart reads ~$2,625).
   `campaign_segments.csv` leaves Lead Gen unmapped, so the DTC WoW report's "Paid DTC
