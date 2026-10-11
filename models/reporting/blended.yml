@@ -89,7 +89,8 @@ models:
       Site sales re-aggregated from order grain so they carry market and
       order_type, which the packaged shopify_sales rollup does not. Floored at
       var('shopify_history_floor') because order history begins 2026-03-25
-      while refunds sync from 2016.
+      while refunds sync from 2016. Counts cancelled orders, as shopify_sales does:
+      gross_sales = first_order + repeat_order + cancelled_order gross sales.
     columns:
       - name: market
         tests:
