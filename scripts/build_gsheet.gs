@@ -832,7 +832,8 @@ function writeReadme_(ss) {
     ['sheet\'s own Total Budget row: it leaves out NB PMax.'],
     ['GROSS SALES VS SPEND (scripts/build_sales_tab.gs, a third file; needs the pacing file):'],
     ['month to date. New vs returning gross sales, new customers, and DTC spend by'],
-    ['platform and by type. Lead Gen counts as Prospecting; TikTok GMV Max is excluded.'],
+    ['platform and by type. Lead Gen counts as Prospecting; TikTok GMV Max is excluded. The'],
+    ['headline gross sales include cancelled orders (a column beside chart 1); the two stacks do not.'],
     [''],
     ['TO REBUILD: Extensions -> Apps Script -> Save -> Run buildReport. Metric sets'],
     ['live in SHAPES, slides in TABS, colours in C.']

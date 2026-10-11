@@ -301,13 +301,16 @@ SALES_COLS = ["date", "month_start", "new_customer_gross_sales", "returning_cust
               "spend_prospecting", "spend_mixed", "spend_brand", "spend_nonbrand"]
 
 
+CANCELLED_PER_DAY = 250.0     # gross_sales minus (new + returning): cancelled orders have no order index
+
+
 def sales_rows(days=6, month="2026-10-01", tiktok=None, google_gap_on_last=False):
     rows = []
     for d in range(1, days + 1):
         iso = f"{month[:8]}{d:02d}"
         meta, google = 1500.0 + d, 1800.0 + d
         last_gap = google_gap_on_last and d == days
-        rows.append([iso, month, 6000.0 + d, 24000.0 + d, 30000.0 + 2 * d, 80 + d,
+        rows.append([iso, month, 6000.0 + d, 24000.0 + d, 30000.0 + 2 * d + CANCELLED_PER_DAY, 80 + d,
                      meta, "" if last_gap else google, tiktok if tiktok is not None else "",
                      700.0, 800.0, "" if last_gap else 1300.0, "" if last_gap else 500.0])
     return rows
@@ -412,11 +415,53 @@ class SalesTab(unittest.TestCase):
         v = self.build(sales_rows())
         cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
         f1, f2 = cells["6,1"]["f"], cells["44,1"]["f"]
-        self.assertTrue(f1.startswith('="Month to date: "&TEXT(SUM(B9:C14),"$#,##0")'), f1)
+        self.assertTrue(f1.startswith('="Month to date: "&TEXT(SUM(F9:F14),"$#,##0")'), f1)       # gross column, not B:C
         self.assertIn("from new customers", f1)
+        self.assertIn("SUM(B9:B14)/SUM(F9:F14)", f1)                     # new-customer share of GROSS sales
         self.assertIn("SUM(D9:E14)", f1)                                 # Meta + Google, TikTok dropped
         self.assertTrue(f2.startswith('="Month to date: "&TEXT(SUM(B47:B52),"#,##0")'), f2)
         self.assertIn("SUM(C47:F52)", f2)
+
+    def test_headline_gross_sales_is_the_feeds_gross_including_cancelled_not_the_stack_sum(self):
+        v = self.build(sales_rows())
+        f1 = self.js(f"{v}.sheets['{self.TAB}'].cells")["6,1"]["f"]
+        self.assertNotIn("SUM(B9:C14)", f1)                              # the stacks no longer feed the headline
+        self.assertIn("SUM(F9:F14)", f1)
+
+    def test_the_gross_column_sits_beside_the_table_but_is_not_charted(self):
+        v = self.build(sales_rows())
+        cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
+        self.assertEqual(cells["8,6"]["v"], "Gross sales, all orders (not charted)")
+        self.assertEqual(cells["9,6"]["v"], 30000.0 + 2 + CANCELLED_PER_DAY)          # day 1: new + returning + cancelled
+        chart = self.charts(v)["Gross Sales vs. paid spend"]
+        self.assertEqual(chart["ranges"][0][3], 5)                       # the chart still spans date + 4 series only
+        self.assertEqual(chart["pos"], [5, 7])                           # and starts one column right of the gross column
+        self.assertEqual(self.js(f"{v}.sheets['{self.TAB}'].cells")["8,1"]["v"], "Date")
+
+    def test_chart_two_has_no_gross_column_and_keeps_its_own_headline(self):
+        v = self.build(sales_rows())
+        cells = self.js(f"{v}.sheets['{self.TAB}'].cells")
+        self.assertNotIn("46,7", cells)
+        self.assertNotIn("Gross sales, all orders", json.dumps({k: c.get("v") for k, c in cells.items() if k.startswith("46,")}))
+        self.assertTrue(cells["44,1"]["f"].startswith('="Month to date: "&TEXT(SUM(B47:B52),"#,##0")'))
+
+    def test_a_blank_gross_day_is_a_gap_not_a_zero(self):
+        rows = sales_rows(days=3)
+        rows[2][4] = ""
+        cells = self.js(f"{self.build(rows)}.sheets['{self.TAB}'].cells")
+        self.assertEqual(cells["11,6"]["v"], "")
+
+    def test_the_note_says_the_headline_includes_cancelled_orders(self):
+        cells = self.js(f"{self.build(sales_rows())}.sheets['{self.TAB}'].cells")
+        self.assertIn("cancelled orders", cells["3,1"]["v"])
+
+    def test_a_feed_without_gross_sales_is_a_clear_error(self):
+        cols = [c for c in SALES_COLS if c != "gross_sales"]
+        rows = [[v for c, v in zip(SALES_COLS, r) if c != "gross_sales"] for r in sales_rows()]
+        self.ctx.eval(f"var vg = makeSpreadsheet('dtc sales vs spend @ 98', {json.dumps([cols] + rows)});")
+        self.ctx.eval("buildSalesTab_(vg);")
+        note = self.js(f"vg.sheets['{self.TAB}'].cells")["3,1"]["v"]
+        self.assertIn("gross_sales", note)
 
     def test_month_follows_the_data_and_an_unknown_override_is_ignored(self):
         v = self.build(sales_rows(days=3, month="2026-09-01") + sales_rows(days=6, month="2026-10-01"))
