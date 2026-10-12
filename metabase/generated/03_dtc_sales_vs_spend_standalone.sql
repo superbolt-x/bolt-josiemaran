@@ -89,6 +89,7 @@ dtc_sales_vs_spend__typed_spend as (
                'prospecting'::varchar(16) as spend_type
         union all select 'meta', '120214146763940613', '', 'dtc', 'temp_retargeting', 'mixed'
         union all select 'meta', '120252630357450613', '', 'dtc', 'lead_gen', 'prospecting'
+        union all select 'meta', '120252934320720613', '', 'dtc', 'prospecting_atc', 'prospecting'
         union all select 'google', '21703833786', '', 'dtc', 'us_branded_pmax', 'brand'
         union all select 'google', '21704002557', '', 'dtc', 'us_branded_search', 'brand'
         union all select 'google', '21703908630', '', 'dtc', 'ca_branded_search', 'brand'
