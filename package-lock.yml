@@ -10,7 +10,7 @@ packages:
     revision: ac915493e228a5413c7212432a8b52052350cd10
   - git: https://github.com/superbolt-x/bolt-dbt-shopify-package.git
     name: bolt_dbt_shopify_package
-    revision: 2b527affdf9b001d6f849e4977e1ab89beafd3be
+    revision: 6a32bc29fee797c589047bb7071eceb510ad5e46
   - git: https://github.com/superbolt-x/bolt-dbt-tiktok-package.git
     name: bolt_dbt_tiktok_package
     revision: 3897b0e1fec4776811ef30e108ef2917b832a3e3
