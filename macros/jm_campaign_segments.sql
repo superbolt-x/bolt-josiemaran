@@ -17,9 +17,9 @@
   and visible: unmapped spend shows on the Health rows rather than being
   silently folded into a total. When a campaign launches, add its ID here.
 
-  Current mapping (18 campaigns, 8 segments):
+  Current mapping (19 campaigns, 8 segments):
       Google Overall       4 campaign(s): google:21704002557, google:21703908630, google:21703833786, google:24209915936
-      Meta Overall         2 campaign(s): meta:120251956330760613, meta:120214146763940613
+      Meta Overall         3 campaign(s): meta:120251956330760613, meta:120214146763940613, meta:120252934320720613
       Sephora @ Kohls      1 campaign(s): meta:120234201732920613
       Sephora CA Collab    2 campaign(s): meta:120239209497810303, meta:120250632750520303/adset:120250633537060303
       Sephora CA Traffic   3 campaign(s): meta:120250328578570303, tiktok:1874694608225890, tiktok:1836386473412625
@@ -57,6 +57,7 @@
         union all select 'google', '24209915936', '', 'Google Overall', 'DTC', true
         union all select 'meta', '120251956330760613', '', 'Meta Overall', 'DTC', true
         union all select 'meta', '120214146763940613', '', 'Meta Overall', 'DTC', true
+        union all select 'meta', '120252934320720613', '', 'Meta Overall', 'DTC', true
         union all select 'tiktok', '1876696959444129', '', 'TikTok Overall', 'DTC', false
         union all select 'meta', '120250319355050303', '', 'Sephora US Traffic', 'Sephora', false
         union all select 'tiktok', '1874691217255666', '', 'Sephora US Traffic', 'Sephora', false
