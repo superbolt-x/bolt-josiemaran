@@ -51,6 +51,9 @@
  *    Overall" leaves Lead Gen out, so the two will not agree on Meta spend.
  *  - TikTok GMV Max is EXCLUDED: its revenue is TikTok Shop GMV, which never reaches
  *    Shopify, and these charts compare spend with Shopify sales.
+ *  - The headline's gross sales is the feed's gross_sales (cancelled orders INCLUDED, as the weekly doc's
+ *    figure is), shown in a column beside chart 1's table. The two stacks are new + returning customer
+ *    sales; a cancelled order has no order index and is in neither, so they sum to 0.4-1.1% less.
  *  - "TikTok spend" has no sampled colour (there are no TikTok bars in the doc chart
  *    to sample); it uses the light blue the pacing charts use for Meta prospecting.
  *  - Chart titles carry no month, so a chart is edited in place and keeps its ID,
@@ -69,7 +72,7 @@ var SALES_CHART           = { width: 1100, height: 420 };
 var SALES_NOTE_COLOR      = '#66756f';
 var SALES_GRIDLINES       = 5;     // same count on both axes, so their gridlines line up
 var SALES_REQUIRED_COLS   = ['date', 'month_start', 'new_customer_gross_sales',
-  'returning_customer_gross_sales', 'new_customers', 'spend_meta', 'spend_google', 'spend_tiktok',
+  'returning_customer_gross_sales', 'gross_sales', 'new_customers', 'spend_meta', 'spend_google', 'spend_tiktok',
   'spend_prospecting', 'spend_mixed', 'spend_brand', 'spend_nonbrand'];
 
 // Colours are sampled from the doc's rendered charts. `left` series use the left axis and
@@ -77,6 +80,7 @@ var SALES_REQUIRED_COLS   = ['date', 'month_start', 'new_customer_gross_sales',
 var SALES_CHARTS = [
   { id: 'sales', title: 'Gross Sales vs. paid spend',
     leftTitle: 'Gross Sales', rightTitle: 'Paid spend',
+    grossCol: 'gross_sales', grossLabel: 'Gross sales, all orders (not charted)',
     left: [
       { col: 'new_customer_gross_sales',       label: 'New-customer gross sales',       color: '#D98C00', fmt: '$#,##0' },
       { col: 'returning_customer_gross_sales', label: 'Returning-customer gross sales', color: '#1CB07A', fmt: '$#,##0' }],
@@ -194,7 +198,10 @@ function salesChartModel_(rows, monthIso, cfg) {
     });
     return best;
   }
-  return { cfg: cfg, columns: columns, matrix: matrix, nLeft: left.length, nRight: right.length,
+  // Official gross sales per day (cancelled orders included). Not a chart series: a cancelled order has no
+  // order index, so it is in neither the new nor the returning stack and the stacks sum to a little less.
+  var gross = cfg.grossCol ? days.map(function (r) { return r[cfg.grossCol] === null ? '' : r[cfg.grossCol]; }) : null;
+  return { cfg: cfg, columns: columns, matrix: matrix, gross: gross, nLeft: left.length, nRight: right.length,
            leftMax: salesNiceMax_(tallest(left), SALES_GRIDLINES - 1),
            rightMax: salesNiceMax_(tallest(right), SALES_GRIDLINES - 1),
            empty: days.length === 0 || columns.length === 0 };
@@ -250,7 +257,8 @@ function buildSalesTab_(ss) {
     sh.getRange(2, 5).setValue('Data through');
     sh.getRange(2, 6).setNumberFormat('@').setValue(pick.latest).setFontWeight('bold');
     sh.getRange(3, 1).setValue('Month to date, through the last complete day. Lead Gen counts as Prospecting; ' +
-      'TikTok GMV Max is excluded (its revenue is TikTok Shop, not Shopify). A blank spend day means that platform has not synced yet.' +
+      'TikTok GMV Max is excluded (its revenue is TikTok Shop, not Shopify). The headline gross sales include cancelled orders, ' +
+      'which are in neither stack. A blank spend day means that platform has not synced yet.' +
       (pick.overrideIgnored ? '  (Month override ignored: that month is not in the feed.)' : ''))
       .setFontColor(SALES_NOTE_COLOR);
 
@@ -295,9 +303,13 @@ function writeSalesBlock_(sh, top, model) {
     var leftFmt = model.columns[0].s.fmt === '#,##0' ? '#,##0' : '$#,##0';
     var leftRng = 'B' + first + ':' + leftEnd + last;
     var leftWord = model.cfg.id === 'sales' ? ' gross sales' : ' new customers';
-    var lead = '"Month to date: "&TEXT(SUM(' + leftRng + '),"' + leftFmt + '")&"' + leftWord;
+    // Chart 1's headline is the OFFICIAL gross sales (the extra column beside the table, cancelled orders
+    // included), not the sum of the two stacks, so it matches the weekly doc's month-to-date figure.
+    var grossRng = model.gross ? colLetterSales_(nCols + 1) + first + ':' + colLetterSales_(nCols + 1) + last : null;
+    var headRng = grossRng || leftRng;
+    var lead = '"Month to date: "&TEXT(SUM(' + headRng + '),"' + leftFmt + '")&"' + leftWord;
     if (model.cfg.id === 'sales' && model.nLeft > 1) {
-      lead += ' ("&TEXT(IFERROR(SUM(B' + first + ':B' + last + ')/SUM(' + leftRng + '),0),"0%")&" from new customers)';
+      lead += ' ("&TEXT(IFERROR(SUM(B' + first + ':B' + last + ')/SUM(' + headRng + '),0),"0%")&" from new customers)';
     }
     parts.push(lead + '"');
   }
@@ -312,6 +324,10 @@ function writeSalesBlock_(sh, top, model) {
   // axis with thin bars, where the doc's charts are discrete.
   sh.getRange(first, 1, n, 1).setNumberFormat('@');
   sh.getRange(first, 1, n, nCols).setValues(model.matrix);
+  if (model.gross) {
+    sh.getRange(headerRow, nCols + 1).setValue(model.cfg.grossLabel).setFontWeight('bold');
+    sh.getRange(first, nCols + 1, n, 1).setValues(model.gross.map(function (v) { return [v]; })).setNumberFormat('$#,##0');
+  }
   // The axis labels follow each column's number format, so format by what it holds.
   model.columns.forEach(function (c, k) { sh.getRange(first, 2 + k, n, 1).setNumberFormat(c.s.fmt); });
 }

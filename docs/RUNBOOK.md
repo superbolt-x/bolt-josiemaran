@@ -578,6 +578,12 @@ reaches `budget_pacing` at the first cycle after that.
 - **TikTok's light blue is not sampled** from the doc (there are no TikTok bars in it to
   sample); it reuses the light blue of the pacing charts.
 - **Spend is blank, not 0, on a day a platform has not synced.** Sales still show.
+- **Chart 1's headline gross sales is `gross_sales`, cancelled orders included.** It is the same figure the weekly doc quotes for
+  the month so far (Oct 1-9: $339,076 against $336,834 when it was summed from the two stacks). It is read from a column beside the
+  table, "Gross sales, all orders (not charted)", and the "% from new customers" is new-customer sales over that figure. The stacks
+  are new + returning, which leave cancelled orders out (they have no order index), so they sum to 0.4-1.1% less than the headline.
+  The script needs `gross_sales` in the feed (card 57544 already has it) and fails with a clear message if it is missing.
+  Paste the updated `build_sales_tab.gs` and `build_gsheet.gs` into the Apps Script project and deploy a new version.
 
 ## If a test fails
 
