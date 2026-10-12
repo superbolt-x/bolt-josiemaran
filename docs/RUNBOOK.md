@@ -533,11 +533,13 @@ trusting a green run. To rebuild by hand after a change to the Shopify or blende
 `legged_earplugs`; `confirm_pogo` follows `legged_earplugs` on its own. `POST https://api.fivetran.com/v1/transformations/<job>/run`
 with body `{}` and the header `Content-Type: application/json` (without it the API answers 415).
 
-**Guard test, pending.** `assert_shopify_sales_ties_to_segment` is meant to run as a second step of `usurped_dread`. Adding it on
-2026-10-11 made the job FAIL and exposed a real race: `shopify_sales_by_segment` read the order table through `source()`, so dbt
-could build it before the order table, and the first vs repeat split differed on 44 historical days. The model now uses `ref()`
-(branch `fix/by-segment-wait-for-order-table`). Once that is merged, add the step (`dbt test --select
-assert_shopify_sales_ties_to_segment`) to `usurped_dread` and run the job once to see it pass. Until then the step is **not** on the job.
+**Guard test.** `assert_shopify_sales_ties_to_segment` is the second step of `usurped_dread` (`dbt test --select
+assert_shopify_sales_ties_to_segment`): `shopify_sales` and `shopify_sales_by_segment` must agree day by day on gross sales, orders,
+first and repeat order counts and gross sales, and new customers, and gross = first + repeat + cancelled must hold inside
+`shopify_sales_by_segment`. It was added on 2026-10-11 and failed, then again on 2026-10-12 and failed, for two different reasons
+(see the next two bullets under "What is counted"), and has run green since 2026-10-12 05:44 UTC, including with `usurped_dread` and
+`legged_earplugs` started at the same moment as the scheduled cycle does. If it fails, the job is marked FAILED and the hourly alert posts
+to `#data-script-errors`; the tables themselves were already built.
 
 The loader that fills `gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so a budget edit
 reaches `budget_pacing` at the first cycle after that.
@@ -558,11 +560,21 @@ reaches `budget_pacing` at the first cycle after that.
   yet, so run `dbt test --select assert_shopify_sales_ties_to_segment` or add a test step to `usurped_dread`.
 - **`shopify_sales_by_segment` reads the order table with `ref()`, so dbt builds the order table first.** It used `source()`, which
   dbt cannot order: in a `usurped_dread` run the model was built at 19:38:08 and the order table it reads at 19:38:27, so it
-  classified orders first vs repeat from the previous build while `shopify_sales` used the new one. Gross sales and order counts
-  still agreed, but `first_order_gross_sales` / `repeat_order_gross_sales` differed on 44 historical days, and
-  `assert_shopify_sales_ties_to_segment` failed. Rebuilding `shopify_sales_by_segment` from the current order table made the
-  test pass. Side effect of the `ref()`: `+blended_performance` (job `legged_earplugs`) now also rebuilds `shopify_daily_sales_by_order`,
-  `shopify_line_items` and `shopify_orders`, the same three models `usurped_dread` already rebuilds.
+  classified orders first vs repeat from the previous build while `shopify_sales` used the new one. Side effect of the `ref()`:
+  `+blended_performance` (job `legged_earplugs`) now also rebuilds `shopify_daily_sales_by_order`, `shopify_line_items` and
+  `shopify_orders`, the same three models `usurped_dread` already rebuilds.
+- **The package's `customer_order_index` was not deterministic, and is fixed.** `bolt-dbt-shopify-package` computed it as
+  `ROW_NUMBER() OVER (PARTITION BY customer_id ... ORDER BY order_date)` with `order_date = processed_at::date`, so a customer's orders
+  on the same day tied and which one was "first" could change on every rebuild. Counts of first and repeat orders did not change, only
+  their amounts: two tables built moments apart disagreed on first/repeat gross sales on 34 days ($1,511 in all, worst day $242, 0.08%).
+  Built twice from identical data the old model gave a different index for 4,053 of 891,716 orders; the fixed one gives 0. The fix is
+  `ORDER BY order_date, order_id` (package PR #4, revision `6a32bc2`), pinned here by `package-lock.yml` (PR #13). Verified on
+  2026-10-12 in Fivetran: the order index was identical across three builds (`usurped_dread` alone, `legged_earplugs` alone, both at
+  once), and the tie-out had 0 failing days each time. The new vs returning gross split shifted once when the fix deployed (first-order
+  gross changed on 627 days across all history, worst day $737) and no longer moves between builds.
+- **Package versions are pinned in `package-lock.yml`.** A change in a package repo reaches this project only when its `revision` is
+  bumped there. Bump one package at a time by editing that package's `revision` line (not `dbt deps --upgrade`, which moves every
+  package), run `dbt deps` to check it installs, and diff the package between the two revisions first.
   (`metabase/generated/01_reporting_feed_standalone.sql` still has the old filter; that pre-dbt file is unused, and its
   generator, `scripts/build_standalone_feed.py`, already fails on `tiktok_gmv_raw`.)
 
