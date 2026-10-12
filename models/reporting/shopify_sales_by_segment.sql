@@ -29,6 +29,8 @@
     same run, so it classified first vs repeat orders from the previous build while `shopify_sales`
     (a ref) used the new one: the two disagreed on first_order_gross_sales / repeat_order_gross_sales
     on 44 historical days (2026-10-11), with gross sales and order counts still equal.
+    ref() stops that, but the split is also not stable between two builds of the order table, because
+    the package's customer_order_index ties on same-day orders: see tests/assert_shopify_sales_ties_to_segment.sql.
 
     CANCELLED ORDERS ARE INCLUDED, exactly as the packaged `shopify_sales` includes them
     (dbt var canceled_orders: 'included'). That is the definition the team's weekly

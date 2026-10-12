@@ -533,11 +533,12 @@ trusting a green run. To rebuild by hand after a change to the Shopify or blende
 `legged_earplugs`; `confirm_pogo` follows `legged_earplugs` on its own. `POST https://api.fivetran.com/v1/transformations/<job>/run`
 with body `{}` and the header `Content-Type: application/json` (without it the API answers 415).
 
-**Guard test, pending.** `assert_shopify_sales_ties_to_segment` is meant to run as a second step of `usurped_dread`. Adding it on
-2026-10-11 made the job FAIL and exposed a real race: `shopify_sales_by_segment` read the order table through `source()`, so dbt
-could build it before the order table, and the first vs repeat split differed on 44 historical days. The model now uses `ref()`
-(branch `fix/by-segment-wait-for-order-table`). Once that is merged, add the step (`dbt test --select
-assert_shopify_sales_ties_to_segment`) to `usurped_dread` and run the job once to see it pass. Until then the step is **not** on the job.
+**Guard test, pending.** `assert_shopify_sales_ties_to_segment` is meant to run as a second step of `usurped_dread` (`dbt test
+--select assert_shopify_sales_ties_to_segment`). It was added on 2026-10-11 and again on 2026-10-12 and failed both times, for two
+different reasons: first a build-order race (fixed by the `ref()`), then the package's unstable first/repeat split (the test now
+leaves those two columns out). Once the version that compares only stable columns is merged and Fivetran has pulled it, add the step
+and run the job twice, once alone and once together with `legged_earplugs` (as the scheduled cycle does). Until then the step is
+**not** on the job.
 
 The loader that fills `gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so a budget edit
 reaches `budget_pacing` at the first cycle after that.
@@ -558,11 +559,17 @@ reaches `budget_pacing` at the first cycle after that.
   yet, so run `dbt test --select assert_shopify_sales_ties_to_segment` or add a test step to `usurped_dread`.
 - **`shopify_sales_by_segment` reads the order table with `ref()`, so dbt builds the order table first.** It used `source()`, which
   dbt cannot order: in a `usurped_dread` run the model was built at 19:38:08 and the order table it reads at 19:38:27, so it
-  classified orders first vs repeat from the previous build while `shopify_sales` used the new one. Gross sales and order counts
-  still agreed, but `first_order_gross_sales` / `repeat_order_gross_sales` differed on 44 historical days, and
-  `assert_shopify_sales_ties_to_segment` failed. Rebuilding `shopify_sales_by_segment` from the current order table made the
-  test pass. Side effect of the `ref()`: `+blended_performance` (job `legged_earplugs`) now also rebuilds `shopify_daily_sales_by_order`,
-  `shopify_line_items` and `shopify_orders`, the same three models `usurped_dread` already rebuilds.
+  classified orders first vs repeat from the previous build while `shopify_sales` used the new one. Side effect of the `ref()`:
+  `+blended_performance` (job `legged_earplugs`) now also rebuilds `shopify_daily_sales_by_order`, `shopify_line_items` and
+  `shopify_orders`, the same three models `usurped_dread` already rebuilds.
+- **The first vs repeat GROSS split is not stable between builds of the order table (package bug, not fixed here).** The package
+  (`bolt-dbt-shopify-package`, `models/base/shopify_orders.sql`) computes `customer_order_index` as `ROW_NUMBER() OVER (PARTITION BY
+  customer_id ... ORDER BY order_date)` with `order_date = processed_at::date`. A customer's orders on the same day tie, so which one
+  is "first" is arbitrary and can flip on every rebuild. Counts of first and repeat orders do not change, only their amounts: on
+  2026-10-12 34 days differed between two tables built moments apart, $1,511 in all, worst day $242, 0.08% of first-order gross sales.
+  Gross sales, orders and new customers are unaffected. It also means the new vs returning stacks can move by a few dollars between
+  refreshes. The fix is `ORDER BY order_date, order_id` in the package; until then `assert_shopify_sales_ties_to_segment` compares only
+  the stable columns.
   (`metabase/generated/01_reporting_feed_standalone.sql` still has the old filter; that pre-dbt file is unused, and its
   generator, `scripts/build_standalone_feed.py`, already fails on `tiktok_gmv_raw`.)
 
