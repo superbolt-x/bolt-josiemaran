@@ -28,7 +28,8 @@
     not know the dependency and could build this model BEFORE the order table was rebuilt in the
     same run, so it classified first vs repeat orders from the previous build while `shopify_sales`
     (a ref) used the new one: the two disagreed on first_order_gross_sales / repeat_order_gross_sales
-    on 44 historical days (2026-10-11), with gross sales and order counts still equal.
+    on 44 historical days (2026-10-11), with gross sales and order counts still equal. (A second cause, the
+    package's non-deterministic customer_order_index on same-day orders, is fixed in package revision 6a32bc2.)
 
     CANCELLED ORDERS ARE INCLUDED, exactly as the packaged `shopify_sales` includes them
     (dbt var canceled_orders: 'included'). That is the definition the team's weekly
