@@ -476,12 +476,71 @@ Script project **next to** `build_pacing_tabs.gs` (it needs that file's helpers)
 
 ## Keeping the tables fresh
 
-`budget_pacing` and `dtc_sales_vs_spend` are dbt tables, so they are only as current as the
-last `dbt run` that built them. Nothing on this box schedules dbt for Josie Maran (only Erie
-has a cron-run dbt), so **confirm that whatever runs the daily dbt job builds these two**. If
-that job selects models explicitly, add them after `blended_performance`. If it does not,
-the actuals on the charts stop moving, with no error. The loader that fills
-`gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so dbt should run after it.
+`budget_pacing` and `dtc_sales_vs_spend` are dbt tables, so they are only as current as the last
+dbt run that built them.
+
+**dbt for Josie Maran runs in Fivetran Transformations (dbt Core)**: project `swooned_plaza`, repo
+`bolt-josiemaran`, branch `main`. Its jobs are all `INTEGRATED`: each runs right after specific
+connectors finish syncing, which works out to roughly every four hours.
+
+| Job | Name | Runs after | Builds |
+|---|---|---|---|
+| `usurped_dread` | shopify_performance | the Shopify connector | `+shopify_daily_sales_by_order_line_item +shopify_sales +shopify_sales_by_segment`, `--full-refresh` |
+| `legged_earplugs` | blended_performance | any of the four connectors | `+blended_performance`, `--full-refresh` |
+| `clamshell_oversleep` | facebook_performance | the Meta connector | the Facebook models |
+| `hypotheses_imply` | tiktok_performance | the TikTok connector | the TikTok models |
+| `outboard_mixed` | google_performance | the Google connector | the Google models |
+| `confirm_pogo` | JM budget pacing + sales vs spend | the job `legged_earplugs` | `budget_pacing`, `dtc_sales_vs_spend`, and their tests |
+
+Jobs trigger off connectors, not off each other (only `confirm_pogo` follows another job), so one failing does not stop the rest.
+
+**The existing jobs run SELECTED models, not the whole project, so a new model is not built until
+it is added to a job.** Checked 2026-10-07: the 16:05 UTC run rebuilt `blended_performance` and
+`shopify_sales_by_segment` but not the two new models, which kept their manual build from 13:21.
+Remember this whenever a model is added to the repo.
+
+**Job `confirm_pogo`, "JM budget pacing + sales vs spend (after blended_performance)"** builds them:
+
+- Schedule: `INTEGRATED` after the job `legged_earplugs`, the one that rebuilds `blended_performance`
+  (the table was rebuilt at 12:06:43 inside that job's 12:05:33-12:06:57 run). So the two models are
+  rebuilt right after `blended_performance`, every cycle, and the sheet never sits a day behind.
+- Steps: `dbt run --select budget_pacing dtc_sales_vs_spend`, then `dbt test --select` on both models
+  and their four singular tests. A failing test fails the job.
+- First run 2026-10-07 16:11 UTC (triggered by hand): SUCCEEDED in 2m34s, both tables rebuilt by Fivetran.
+- It was created through the API, so **it exists only in Fivetran, not in this repo**. To change it:
+  Fivetran, Transformations, josiemaran. To add another model, add it to the `--select` of the run
+  step (and any test of it to the test step).
+
+To check that a job built a table, compare its build time (dbt swaps the table in, so creation time
+is the last build):
+
+```sql
+select relname, relcreationtime from pg_class_info
+where relnamespace = (select oid from pg_namespace where nspname = 'reporting') and relkind = 'r'
+  and relname in ('josiemaran_budget_pacing', 'josiemaran_dtc_sales_vs_spend', 'josiemaran_blended_performance');
+```
+
+**Failure alerting.** `josiemaran/fivetran_dbt_job_alert.py` (outside this repo; hourly cron at :07 UTC in `crontab_config`)
+reads `/v1/transformations?project_id=swooned_plaza` and posts to `#data-script-errors`, once per event: a job **FAILED** (and
+later **recovered**), **RUNNING** for over 90 minutes (stuck), or **not started for over 26 hours** (stale). Paused jobs are ignored.
+State is `fivetran_dbt_job_alert_state.json`, the log `fivetran_dbt_job_alert.log`, and `--test-alert` posts one labelled test.
+Tests: `python -m unittest test_fivetran_dbt_job_alert`. A failed job keeps its previous tables. The older
+`fivetran/fivetran_transformations_alert.py` reads the legacy `/v1/dbt/projects` API (404 for this project) and is not scheduled.
+
+**Shipping a change: Fivetran pulls `main` a few minutes AFTER a merge.** A job triggered one minute after PR #9 merged ran the old
+code and still reported SUCCEEDED. Wait about five minutes, run the job, and check that the new column or table exists before
+trusting a green run. To rebuild by hand after a change to the Shopify or blended models, run `usurped_dread`, then
+`legged_earplugs`; `confirm_pogo` follows `legged_earplugs` on its own. `POST https://api.fivetran.com/v1/transformations/<job>/run`
+with body `{}` and the header `Content-Type: application/json` (without it the API answers 415).
+
+**Guard test, pending.** `assert_shopify_sales_ties_to_segment` is meant to run as a second step of `usurped_dread`. Adding it on
+2026-10-11 made the job FAIL and exposed a real race: `shopify_sales_by_segment` read the order table through `source()`, so dbt
+could build it before the order table, and the first vs repeat split differed on 44 historical days. The model now uses `ref()`
+(branch `fix/by-segment-wait-for-order-table`). Once that is merged, add the step (`dbt test --select
+assert_shopify_sales_ties_to_segment`) to `usurped_dread` and run the job once to see it pass. Until then the step is **not** on the job.
+
+The loader that fills `gsheet_raw.josie_maran_budget_forecast` runs at 09:00 UTC, so a budget edit
+reaches `budget_pacing` at the first cycle after that.
 
 ## What is counted, and why it differs from the DTC WoW report
 
