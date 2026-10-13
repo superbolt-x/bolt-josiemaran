@@ -16,18 +16,42 @@ It is a GENERATOR, not a fork. The standalone card is derived from the same
 model files, so the interim numbers and the post-dbt numbers cannot drift. Edit
 the models, re-run this, done.
 
-    python3 scripts/build_standalone_feed.py
+    python3 scripts/build_standalone_feed.py            # (re)generate the standalone card
+    python3 scripts/build_standalone_feed.py --check    # exit 1 if the committed file is stale
+
+How the models are rendered
+---------------------------
+With real Jinja, the engine dbt itself uses. This used to be a hand-written regex
+re-implementation of the few Jinja constructs the models happened to use (var,
+source, ref, macro calls, one `if`). It stopped working the day a model used a
+`for` loop and a package macro (the TikTok GMV Max CTE in blended_performance),
+and nobody noticed for weeks because nothing ran it and the committed standalone
+file simply went stale. Rendering with Jinja removes that class of failure: a new
+construct just works, and a name the builder cannot resolve (an undeclared source,
+an unknown macro, an unset var, an unmapped ref) is a loud error, never a quiet
+miscompile. `var()` values come from dbt_project.yml and source schemas from the
+`sources:` blocks in models/**/*.yml, so neither is a second copy to keep in step.
 
 Once `dbt run` has built the models, the standalone card is no longer needed —
 swap the Metabase question to `metabase/01_reporting_feed.sql`, which is the
 same final SELECT over the real table.
 """
 import re, pathlib, sys
+from types import SimpleNamespace
+
+try:
+    import jinja2
+    import yaml
+except ImportError as exc:
+    sys.exit(f"{exc.name} is not installed. It ships with dbt: `pip install {exc.name}`, "
+             f"or run this with the dbt venv's python (/home/ubuntu/.dbt-venv/bin/python).")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DB   = "josiemaran"
 
-VARS = {"shopify_history_floor": "2026-03-25", "week_start": "Sunday"}
+# The project's own vars, straight from dbt_project.yml, so the standalone card can
+# never disagree with dbt about week_start or the Shopify history floor.
+VARS = dict((yaml.safe_load((ROOT / "dbt_project.yml").read_text()) or {}).get("vars") or {})
 
 # Models rendered as CTEs, in dependency order.
 # Only the four models we own. facebook_campaign_performance and
@@ -51,139 +75,118 @@ BASE_TABLES = {
     "tiktok_performance_by_campaign":     f"reporting.{DB}_tiktok_performance_by_campaign",
 }
 
-SOURCE_SCHEMAS = {
-    "facebook_catalog_raw": "facebook_raw",
-    "reporting":            "reporting",
-    "ga4_raw":              "ga4_raw",
-}
+def _declared_sources() -> dict:
+    """{source name: schema} from every `sources:` block in models/**/*.yml."""
+    out = {}
+    for path in sorted((ROOT / "models").rglob("*.yml")):
+        for src in (yaml.safe_load(path.read_text()) or {}).get("sources") or []:
+            out[src["name"]] = src.get("schema", src["name"])     # dbt: schema defaults to the name
+    return out
+
+
+# Derived, not hand-kept: this map falling behind _sources.yml (tiktok_gmv_raw) is what
+# broke the builder. build_sheet_cards.py may still add entries to it in-process.
+SOURCE_SCHEMAS = _declared_sources()
+
+
+# Package macros a model may call. Listed, not globbed: the packages hold hundreds of
+# macros, many written against dbt's own Jinja extensions and not parseable by plain
+# Jinja, and loading them all would let one silently shadow a macro of ours.
+PACKAGE_MACROS = [
+    "dbt_packages/bolt_dbt_utils/macros/snippets/utils/get_date_parts.sql",
+]
+
+
+def _var(name, default=None):
+    if name in VARS:
+        return VARS[name]
+    if default is not None:
+        return default
+    raise KeyError(f"var('{name}') is not set in dbt_project.yml and has no default")
+
+
+def _source(source_name, table):
+    if source_name not in SOURCE_SCHEMAS:
+        raise KeyError(f"source('{source_name}', ...) is not declared in any models/**/*.yml")
+    return f"{SOURCE_SCHEMAS[source_name]}.{table}"
+
+
+def _ref(target):
+    if target in BASE_TABLES:
+        return BASE_TABLES[target]
+    if target in CHAIN:
+        return target            # becomes a CTE in this compilation
+    raise RuntimeError(f"unmapped ref('{target}') — add it to BASE_TABLES or CHAIN")
+
+
+def _env() -> "jinja2.Environment":
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined, extensions=["jinja2.ext.do"])
+    env.globals.update(
+        var=_var, ref=_ref, source=_source,
+        config=lambda *a, **k: "",                   # {{ config(...) }} renders to nothing, as in dbt
+        target=SimpleNamespace(database=DB, name=DB, schema="reporting", type="redshift"),
+    )
+    return env
 
 
 def load_macros() -> dict:
-    """Parse macros/*.sql into {name: (args, body)}."""
-    macros = {}
-    for path in sorted((ROOT / "macros").glob("*.sql")):
-        text = path.read_text()
-        for m in re.finditer(
-            r"\{%\s*macro\s+(\w+)\s*\(([^)]*)\)\s*%\}(.*?)\{%\s*endmacro\s*%\}",
-            text, re.S,
-        ):
-            name, args, body = m.group(1), m.group(2), m.group(3)
-            arg_names = [a.strip() for a in args.split(",") if a.strip()]
-            macros[name] = (arg_names, body)
+    """{name: macro} for every project macro plus the package macros models call."""
+    texts = [p.read_text() for p in sorted((ROOT / "macros").glob("*.sql"))]
+    for rel in PACKAGE_MACROS:
+        path = ROOT / rel
+        if not path.exists():
+            sys.exit(f"{rel} not found — run `dbt deps` first")
+        texts.append(path.read_text())
+    module = _env().from_string("\n".join(texts)).module
+    macros = {k: v for k, v in vars(module).items() if isinstance(v, jinja2.runtime.Macro)}
+    if not macros:
+        sys.exit("no macros parsed — check macros/*.sql")
     return macros
 
 
-def strip_jinja_comments(sql: str) -> str:
-    return re.sub(r"\{#.*?#\}", "", sql, flags=re.S)
-
-
-def expand_macros(sql: str, macros: dict, depth: int = 0) -> str:
-    """Substitute {{ macro_name('arg') }} with the macro body, args bound."""
-    if depth > 8:
-        raise RuntimeError("macro expansion too deep — recursive macro?")
-
-    # Matches both `{{ macro('arg') }}` and the zero-arg `{{ macro() }}` form.
-    pattern = re.compile(r"\{\{\s*(\w+)\s*\(([^{}]*?)\)\s*\}\}")
-
-    def repl(m):
-        name, raw_args = m.group(1), m.group(2)
-        if name not in macros:
-            return m.group(0)
-        arg_names, body = macros[name]
-        # split on top-level commas
-        args, depth_p, cur = [], 0, ""
-        for ch in raw_args:
-            if ch in "([":
-                depth_p += 1
-            elif ch in ")]":
-                depth_p -= 1
-            if ch == "," and depth_p == 0:
-                args.append(cur.strip()); cur = ""
-            else:
-                cur += ch
-        if cur.strip():
-            args.append(cur.strip())
-        # strip quotes off literal args
-        vals = [a[1:-1] if len(a) > 1 and a[0] == a[-1] and a[0] in "'\"" else a
-                for a in args]
-        out = body
-        for an, av in zip(arg_names, vals):
-            # 1. the plain `{{ arg }}` form
-            out = re.sub(r"\{\{\s*" + re.escape(an) + r"\s*\}\}", av, out)
-            # 2. the arg passed on to a NESTED macro call, e.g.
-            #    jm_period_start's body contains `{{ jm_week_start(date_col) }}`.
-            #    Without this the nested call is expanded on a later pass with
-            #    the literal parameter NAME bound as its argument, and the SQL
-            #    comes out referencing a column called `date_col`. dbt's real
-            #    Jinja binds these correctly; this compiler has to be told.
-            out = re.sub(
-                r"(\{\{[^{}]*?)\b" + re.escape(an) + r"\b([^{}]*?\}\})",
-                lambda m: m.group(1) + av + m.group(2), out)
-        return "(" + strip_jinja_comments(out).strip() + ")"
-
-    new = pattern.sub(repl, sql)
-    if new != sql:
-        return expand_macros(new, macros, depth + 1)
-    return new
-
-
-def render_model(name: str, macros: dict) -> str:
+def render_model(name: str, macros: dict):
+    """
+    Render a model (or a test, as '../../tests/<name>') to plain SQL.
+    Returns (sql, had_with); when the body opens with its own WITH, that keyword is
+    stripped so its CTEs can join the outer list.
+    """
     path = ROOT / "models" / "reporting" / f"{name}.sql"
-    sql = path.read_text()
+    sql = _env().from_string(path.read_text()).render(**macros)
 
-    # config block and jinja comments
-    sql = re.sub(r"\{\{\s*config\s*\(.*?\)\s*\}\}", "", sql, flags=re.S)
-    sql = strip_jinja_comments(sql)
-    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)          # block comments
+    # Comments carry no logic and get in the way of splitting CTEs apart. Full-line `--`
+    # first, so a stray `/*` inside one cannot swallow code up to the next `*/`.
+    sql = re.sub(r"^[ \t]*--.*$", "", sql, flags=re.M)
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)
+    sql = re.sub(r"\n{3,}", "\n\n", sql).strip()
 
-    # vars — both `var('x')` and `var('x', 'default')` forms
-    for k, v in VARS.items():
-        sql = re.sub(
-            r"\{\{\s*var\(\s*['\"]" + k + r"['\"]\s*(?:,[^)]*)?\)\s*\}\}", v, sql)
-
-
-    # source()
-    def src(m):
-        schema = SOURCE_SCHEMAS[m.group(1)]
-        return f"{schema}.{m.group(2)}"
-    sql = re.sub(r"\{\{\s*source\(\s*['\"]([\w]+)['\"]\s*,\s*['\"]([\w]+)['\"]\s*\)\s*\}\}", src, sql)
-
-    # macros (before ref, so a macro containing ref still resolves)
-    sql = expand_macros(sql, macros)
-
-    # jm_week_start's body carries a `{% if %}` on var('week_start'). Resolve it
-    # here rather than shipping a Jinja engine — it only exists after the macro
-    # has been inlined above. Sunday is what dbt_project.yml sets and what every
-    # packaged reporting table reflects.
-    sql = re.sub(
-        r"\{%-?\s*set\s+ws\s*=.*?-?%\}\s*"
-        r"\{%-?\s*if\s+ws\.startswith\(\s*'sun'\s*\)\s*-?%\}"
-        r"(.*?)"
-        r"\{%-?\s*else\s*-?%\}.*?\{%-?\s*endif\s*-?%\}",
-        lambda m: m.group(1).strip(), sql, flags=re.S)
-
-    # ref()
-    def ref(m):
-        target = m.group(1)
-        if target in BASE_TABLES:
-            return BASE_TABLES[target]
-        if target in CHAIN:
-            return target            # becomes a CTE in this compilation
-        raise RuntimeError(f"unmapped ref('{target}') — add it to BASE_TABLES or CHAIN")
-    sql = re.sub(r"\{\{\s*ref\(\s*['\"]([\w]+)['\"]\s*\)\s*\}\}", ref, sql)
-
-    leftover = re.findall(r"\{\{.*?\}\}|\{%.*?%\}", sql, flags=re.S)
-    if leftover:
-        raise RuntimeError(f"{name}: unrendered jinja: {leftover[:3]}")
-
-    # a model body may open with its own `with` — strip it and keep the CTEs
-    sql = sql.strip()
     if re.match(r"(?i)^with\b", sql):
-        sql = re.sub(r"(?i)^with\s+", "", sql, count=1)
         # the model's internal CTEs become part of the outer WITH list, and the
         # model's final SELECT becomes the CTE named after the model
-        return sql, True
+        return re.sub(r"(?i)^with\s+", "", sql, count=1), True
     return sql, False
+
+
+def avoid_month_intervals(sql: str) -> str:
+    """
+    Rewrite `x - interval 'N month'` as `dateadd(month, -N, x)`.
+
+    Redshift folds a month interval as a constant when the card reads a stored table, but
+    here the same predicate sits on a computed CTE (blended_performance is a chain of
+    aggregates) and the planner pushes it down to the compute nodes, which cannot evaluate
+    it: "Interval values with month or year parts are not supported". dateadd() is
+    equivalent and always supported. Only the two shapes the card uses are rewritten; any
+    month or year interval that is left is an error, so a new one fails here, loudly,
+    rather than 155 seconds into a query.
+    """
+    sql = re.sub(r"(date_trunc\('month', current_date\)) - interval '(\d+) months?'",
+                 r"dateadd(month, -\2, \1)", sql)
+    sql = re.sub(r"date_trunc\('month', current_date - interval '(\d+) months?'\)",
+                 r"date_trunc('month', dateadd(month, -\1, current_date))", sql)
+    left = re.findall(r"interval\s+'\d+\s*(?:month|year)s?'", sql, flags=re.I)
+    if left:
+        sys.exit(f"{len(left)} month/year interval(s) left in the standalone SQL, e.g. {left[0]!r}: "
+                 f"Redshift cannot run them on a computed CTE. Add a rewrite to avoid_month_intervals().")
+    return sql
 
 
 def main():
@@ -218,7 +221,7 @@ def main():
   JM – Reporting Feed  ·  STANDALONE (pre-dbt) build
   ══════════════════════════════════════════════════════════════════════════════
   GENERATED by scripts/build_standalone_feed.py — do not hand-edit.
-  Edit models/reporting/*.sql or metabase/01_reporting_feed.sql and re-run.
+  Edit the models in models/reporting/ or metabase/01_reporting_feed.sql and re-run.
 
   Reads the base tables that exist today, so the Gsheet can be wired up before
   `dbt run` has built the reporting models. Numbers are identical to the
@@ -234,7 +237,23 @@ with
     parts = [f"{nm} as (\n{bd.strip()}\n)" for nm, bd in cte_blocks]
     out = header + ",\n\n".join(parts) + ",\n\n" + feed_inner.strip() + "\n"
 
+    out = avoid_month_intervals(out)
+
+    # Postgres-family parsers (Redshift) NEST block comments, so a stray `/*` inside the
+    # header -- the glob `models/reporting/*.sql` was one -- leaves it unterminated and the
+    # whole file fails to parse. Model and card comments are stripped above, so only the
+    # header's single pair should remain.
+    if out.count("/*") != out.count("*/"):
+        sys.exit(f"generated SQL has {out.count('/*')} comment opens but {out.count('*/')} closes: "
+                 f"a `/*` inside a block comment (a glob like models/*.sql?) leaves it unterminated")
+
     dest = ROOT / "metabase" / "generated" / "01_reporting_feed_standalone.sql"
+    if "--check" in sys.argv:
+        if not dest.exists() or dest.read_text() != out:
+            sys.exit(f"STALE: {dest.relative_to(ROOT)} no longer matches the models and the card — "
+                     f"run `python3 scripts/build_standalone_feed.py`")
+        print(f"ok: {dest.relative_to(ROOT)} is current")
+        return
     dest.write_text(out)
     print(f"wrote {dest.relative_to(ROOT)}  ({len(out):,} chars, {out.count(chr(10)):,} lines)")
     print(f"CTEs: {', '.join(nm for nm, _ in cte_blocks)}")
@@ -322,6 +341,8 @@ def prefix_ctes(inner, final, model):
     `google` and `meta` and became 'blended_performance__google' /
     'blended_performance__meta'. The platform join then matched nothing and
     every campaign came out 'Unmapped' — with no error anywhere.
+
+    The same care applies to COLUMN names, not just literals: see the note in `swap`.
     """
     mapping = {nm: f"{model}__{nm}" for nm, _ in inner}
 
@@ -332,7 +353,15 @@ def prefix_ctes(inner, final, model):
                 out.append(span)
                 continue
             for old, new in mapping.items():
-                span = re.sub(rf"(?<![\w.]){re.escape(old)}(?![\w])", new, span)
+                # A CTE is only ever REFERENCED as a relation (after FROM / JOIN) or by
+                # qualifying a column with its own name (`old.col`). Renaming every bare
+                # occurrence also renamed output COLUMNS that share a CTE's name: with a CTE
+                # called `orders`, `count(distinct order_id) as orders` became
+                # `... as shopify_sales_by_segment__orders` and the model's `orders` column
+                # vanished, so blended_performance failed with "column orders does not exist".
+                span = re.sub(rf"(?i)\b(from|join)(\s+){re.escape(old)}(?![\w.])",
+                              rf"\1\2{new}", span)
+                span = re.sub(rf"(?<![\w.]){re.escape(old)}(?=\.)", new, span)
             out.append(span)
         return "".join(out)
 

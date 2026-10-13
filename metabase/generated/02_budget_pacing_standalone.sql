@@ -15,10 +15,7 @@
 
 with
 budget_pacing__today as (
--- The calendar date in the business timezone, from the dbt_project.yml
-    -- var time_zone. getdate returns UTC, which is already "tomorrow" for the
-    -- last four evening hours of an Eastern day.
-    select convert_timezone('US/Eastern', getdate())::date as today_local
+select convert_timezone('US/Eastern', getdate())::date as today_local
 ),
 
 budget_pacing__budget_rows as (
@@ -46,12 +43,7 @@ select
 ),
 
 budget_pacing__freshness as (
--- The last COMPLETE day per platform: the day before its latest synced day,
-    -- capped at yesterday. Taken over EVERY campaign on the platform, not just
-    -- the mapped ones, so a paused campaign with no rows cannot make the platform
-    -- look stale. If a whole platform stops spending, this stalls one day behind
-    -- its last spend day, and the days after that stay forecast instead of 0.
-    select
+select
         platform,
         least(max(date) - 1, (select today_local from budget_pacing__today) - 1) as actuals_through
     from budget_pacing__spend_daily
@@ -66,7 +58,8 @@ select
         s.date,
         sum(s.spend)        as actual_spend
     from budget_pacing__spend_daily s
-    join ( (select 'meta'::varchar(16)  as platform,
+    join ( 
+        select 'meta'::varchar(16)  as platform,
                '120251956330760613'::varchar(32) as campaign_id,
                ''::varchar(64) as segment_match,
                'dtc'::varchar(32) as business_unit,
@@ -90,7 +83,8 @@ select
         union all select 'meta', '120250632750520303', 'Sephora CA Collab', 'sephora_ca', 'new_ca_collab', ''
         union all select 'tiktok', '1874694608225890', '', 'sephora_ca', 'ca_traffic', ''
         union all select 'tiktok', '1836386473412625', '', 'sephora_ca', 'ca_traffic', ''
-        union all select 'meta', '120234201732920613', '', 'sephora_kohls', 'kohls_us_traffic', '') ) m
+        union all select 'meta', '120234201732920613', '', 'sephora_kohls', 'kohls_us_traffic', ''
+ ) m
         on  m.platform    = s.platform
         and m.campaign_id = s.campaign_id
         and (m.segment_match = '' or m.segment_match = s.segment)
@@ -98,10 +92,7 @@ select
 ),
 
 budget_pacing__joined as (
--- Full outer, so both of these survive: a budgeted line with no spend yet
-    -- (a future day, or a line that has not launched) and spend on a day that
-    -- has no budget row (an unbudgeted campaign).
-    select
+select
         coalesce(b.date,          s.date)           as date,
         coalesce(b.business_unit, s.business_unit)  as business_unit,
         coalesce(b.platform,      s.platform)       as platform,
@@ -132,7 +123,8 @@ select
     case when j.date <= f.actuals_through then 1 else 0 end                    as is_actual,
     f.actuals_through
 from budget_pacing__joined j
-left join ( (select 'dtc'::varchar(32) as business_unit,
+left join ( 
+        select 'dtc'::varchar(32) as business_unit,
                'meta'::varchar(16) as platform,
                'prospecting_advplus'::varchar(64) as campaign_key,
                'Meta Prospecting Adv+'::varchar(64) as legend_label,
@@ -157,7 +149,8 @@ left join ( (select 'dtc'::varchar(32) as business_unit,
         union all select 'sephora_ca', 'meta', 'ca_collab', 'Meta CA Collab', 2, '#3C78D8', '#999999', ''
         union all select 'sephora_ca', 'meta', 'new_ca_collab', 'New CA Collab', 3, '#2343AA', '#666666', ''
         union all select 'sephora_ca', 'tiktok', 'ca_traffic', 'TikTok CA Traffic', 4, '#FF9900', '#434343', ''
-        union all select 'sephora_kohls', 'meta', 'kohls_us_traffic', 'Meta Traffic', 1, '#A4C2F4', '#999999', '') ) k
+        union all select 'sephora_kohls', 'meta', 'kohls_us_traffic', 'Meta Traffic', 1, '#A4C2F4', '#999999', ''
+ ) k
     on  k.business_unit = j.business_unit
     and k.platform      = j.platform
     and k.campaign_key  = j.campaign_key

@@ -146,6 +146,7 @@ own segment names and re-run `scripts/gen_segment_macro.py`.
 python3 scripts/gen_segment_macro.py
 python3 scripts/build_standalone_feed.py
 python3 scripts/validate_sql.py metabase/generated/01_reporting_feed_standalone.sql
+python3 scripts/build_standalone_feed.py --check      # exits 1 if the committed standalone is out of date
 # 3. dbt run --select blended_performance
 ```
 
@@ -575,8 +576,10 @@ reaches `budget_pacing` at the first cycle after that.
 - **Package versions are pinned in `package-lock.yml`.** A change in a package repo reaches this project only when its `revision` is
   bumped there. Bump one package at a time by editing that package's `revision` line (not `dbt deps --upgrade`, which moves every
   package), run `dbt deps` to check it installs, and diff the package between the two revisions first.
-  (`metabase/generated/01_reporting_feed_standalone.sql` still has the old filter; that pre-dbt file is unused, and its
-  generator, `scripts/build_standalone_feed.py`, already fails on `tiktok_gmv_raw`.)
+  (The generated `metabase/generated/01_reporting_feed_standalone.sql` is a pre-dbt fallback and nothing reads it, but it is kept
+  current: `python3 scripts/build_standalone_feed.py --check` exits 1 when it is stale. The builder renders the models with real
+  Jinja, reads `var()` from `dbt_project.yml` and source schemas from `models/**/*.yml`, so a new model construct or source needs
+  no change to it.)
 
 - **Lead Gen is included**, as Prospecting. The doc's Meta bar and Prospecting bar include
   it (2026-09-27: $2,215 Meta Overall + $404 Lead Gen = $2,619; the chart reads ~$2,625).

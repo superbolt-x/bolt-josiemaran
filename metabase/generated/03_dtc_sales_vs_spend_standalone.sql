@@ -15,15 +15,11 @@
 
 with
 dtc_sales_vs_spend__today as (
--- The calendar date in the business timezone, from the dbt_project.yml var
-    -- time_zone. getdate returns UTC, which is already "tomorrow" for the last
-    -- four evening hours of an Eastern day.
-    select convert_timezone('US/Eastern', getdate())::date as today_local
+select convert_timezone('US/Eastern', getdate())::date as today_local
 ),
 
 dtc_sales_vs_spend__shopify_through as (
--- Last COMPLETE Shopify day, by the same rule as spend below.
-    select
+select
         least(max(date) - 1, (select today_local from dtc_sales_vs_spend__today) - 1) as through_date
     from reporting.josiemaran_shopify_sales_by_segment
     where date_granularity = 'day'
@@ -57,10 +53,7 @@ select
 ),
 
 dtc_sales_vs_spend__freshness as (
--- The last COMPLETE day per platform: the day before its latest synced day,
-    -- capped at yesterday, taken over EVERY campaign on the platform so a paused
-    -- campaign cannot make it look stale.
-    select
+select
         platform,
         least(max(date) - 1, (select today_local from dtc_sales_vs_spend__today) - 1) as actuals_through
     from dtc_sales_vs_spend__spend_rows
@@ -68,20 +61,14 @@ dtc_sales_vs_spend__freshness as (
 ),
 
 dtc_sales_vs_spend__typed_spend as (
--- Only budget lines that have a spend_type. Days past the dtc_sales_vs_spend__freshness limit of
-    -- their platform are dropped here, so they come out NULL below rather than 0.
-    -- No apostrophes in comments in this file: the standalone compiler reads one as
-    -- the start of a string and skips renaming CTE references until the next one.
-    -- The mapping is
-    -- INLINED, not a shared CTE, for the Redshift planner reason noted in
-    -- blended_performance.sql.
-    select
+select
         s.date,
         s.platform,
         m.spend_type,
         sum(s.spend)        as spend
     from dtc_sales_vs_spend__spend_rows s
-    join ( (select 'meta'::varchar(16)  as platform,
+    join ( 
+        select 'meta'::varchar(16)  as platform,
                '120251956330760613'::varchar(32) as campaign_id,
                ''::varchar(64) as segment_match,
                'dtc'::varchar(32) as business_unit,
@@ -105,7 +92,8 @@ dtc_sales_vs_spend__typed_spend as (
         union all select 'meta', '120250632750520303', 'Sephora CA Collab', 'sephora_ca', 'new_ca_collab', ''
         union all select 'tiktok', '1874694608225890', '', 'sephora_ca', 'ca_traffic', ''
         union all select 'tiktok', '1836386473412625', '', 'sephora_ca', 'ca_traffic', ''
-        union all select 'meta', '120234201732920613', '', 'sephora_kohls', 'kohls_us_traffic', '') ) m
+        union all select 'meta', '120234201732920613', '', 'sephora_kohls', 'kohls_us_traffic', ''
+ ) m
         on  m.platform    = s.platform
         and m.campaign_id = s.campaign_id
         and (m.segment_match = '' or m.segment_match = s.segment)
