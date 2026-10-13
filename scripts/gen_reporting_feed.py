@@ -212,6 +212,29 @@ def slide_config_cte():
     )
 
 
+# Report shapes whose slide carries DELIVERY metrics only (Spend, CPM, CTR,
+# Clicks, CPC). A segment on one of these is a Traffic-objective campaign: it
+# never records a conversion, so "spend with zero conversions" is its normal
+# state, not a tracking failure. Must match the shapes in build_gsheet.gs SHAPES
+# whose metrics are all delivery -- scripts/check_feed_contract.py enforces it.
+DELIVERY_ONLY_SHAPES = {"sephoraTraffic"}
+
+
+def zero_exempt_sql():
+    """
+    The segments the Health zero-conversion check skips, as a SQL list: every
+    row of seeds/segment_report_config.csv on a delivery-only shape. Seed-driven
+    on purpose -- a new Traffic segment is exempt the moment it is added there,
+    and any OTHER new segment is checked by default, so scoping the check can
+    never quietly swallow a segment that is supposed to convert.
+    """
+    with open(SLIDE_CONFIG_CSV, newline="") as f:
+        segs = [r["row_label"].strip() for r in csv.DictReader(f)
+                if r["shape"].strip() in DELIVERY_ONLY_SHAPES]
+    # `not in ()` is not valid SQL; an empty list must still parse.
+    return ", ".join("'" + sg.replace("'", "''") + "'" for sg in segs) if segs else "''"
+
+
 def branch(lv, src, grain):
     parts = [
         f"        '{lv['label']}'{' ' * max(1, 38 - len(lv['label']))}as report_level",
@@ -457,6 +480,16 @@ health_ga4 as (
 ),
 
 health_zero as (
+    -- Segments on a delivery-only slide (Traffic objective) are exempt: those
+    -- campaigns never record a conversion, so there is nothing for this check
+    -- to find. With them in, 'Sephora – TikTok' (all Traffic: $24.9k over 30
+    -- days, zero conversions) read FAIL on every refresh and put "1 checks
+    -- failing" on every tab -- and a check that can never pass teaches
+    -- everyone to ignore the banner, which is how the next real failure gets
+    -- missed. The exempt list is generated from seeds/segment_report_config.csv
+    -- (every row on a delivery-only shape): a new Traffic segment is exempt the
+    -- moment it is added there, and any OTHER new segment is checked by
+    -- default. scripts/check_feed_contract.py guards the list.
     select
         business_line || ' – ' || channel        as subject,
         'zero-conversion'                        as check_name,
@@ -469,6 +502,7 @@ health_zero as (
     from reporting.josiemaran_blended_performance
     where date_granularity = 'day' and channel not in ('Shopify', 'GA4')
       and date >= dateadd(day, -30, current_date)
+      and segment not in (@@ZERO_EXEMPT@@)
     group by 1
 ),
 
@@ -493,7 +527,7 @@ health as (
     ) h
 ),
 
-""".replace("@@NULLS@@", ",\n".join(f"        {NULLS[s]}".ljust(48) + f"as {s}" for s in METRIC_SLOTS))
+""".replace("@@NULLS@@", ",\n".join(f"        {NULLS[s]}".ljust(48) + f"as {s}" for s in METRIC_SLOTS)).replace("@@ZERO_EXEMPT@@", zero_exempt_sql())
 
 FINAL = """@@SLIDE_CONFIG@@unioned as (
 @@UNION@@

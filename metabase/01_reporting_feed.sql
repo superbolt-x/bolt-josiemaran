@@ -848,6 +848,16 @@ health_ga4 as (
 ),
 
 health_zero as (
+    -- Segments on a delivery-only slide (Traffic objective) are exempt: those
+    -- campaigns never record a conversion, so there is nothing for this check
+    -- to find. With them in, 'Sephora – TikTok' (all Traffic: $24.9k over 30
+    -- days, zero conversions) read FAIL on every refresh and put "1 checks
+    -- failing" on every tab -- and a check that can never pass teaches
+    -- everyone to ignore the banner, which is how the next real failure gets
+    -- missed. The exempt list is generated from seeds/segment_report_config.csv
+    -- (every row on a delivery-only shape): a new Traffic segment is exempt the
+    -- moment it is added there, and any OTHER new segment is checked by
+    -- default. scripts/check_feed_contract.py guards the list.
     select
         business_line || ' – ' || channel        as subject,
         'zero-conversion'                        as check_name,
@@ -860,6 +870,7 @@ health_zero as (
     from reporting.josiemaran_blended_performance
     where date_granularity = 'day' and channel not in ('Shopify', 'GA4')
       and date >= dateadd(day, -30, current_date)
+      and segment not in ('Sephora US Traffic', 'Sephora CA Traffic', 'Sephora @ Kohls')
     group by 1
 ),
 

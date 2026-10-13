@@ -143,6 +143,50 @@ def main() -> int:
         if grain not in emitted:
             fails.append(f"TABS uses grain '{grain}', card emits only {sorted(emitted)}")
 
+    # 7 — Health's zero-conversion exemption. Scoping a health check is the one
+    # edit that can hide a real failure, so it is pinned from both ends:
+    #   (a) the generator's notion of "delivery-only" must match the Apps Script's:
+    #       a shape is delivery-only iff every metric on its slide is a delivery
+    #       metric. A new delivery-only shape the generator does not know about
+    #       would otherwise keep red-flagging forever; a shape wrongly listed as
+    #       delivery-only would be exempt from the one check that protects it.
+    #   (b) the card's exempt list must be exactly the seed's rows on those shapes.
+    gen_src = (ROOT / "scripts" / "gen_reporting_feed.py").read_text()
+    m = re.search(r"DELIVERY_ONLY_SHAPES\s*=\s*\{([^}]*)\}", gen_src)
+    gen_shapes = set(re.findall(r'"(\w+)"', m.group(1))) if m else set()
+
+    delivery_keys = {"spend", "cpm", "ctr", "clicks", "cpc"}
+    block = gs[gs.index("var SHAPES = {"):]
+    block = block[: block.index("\n};")]
+    gs_shapes = set()
+    for name, body in re.findall(r"\n  (\w+): \{(.*?)(?=\n  \w+: \{|\Z)", block, re.S):
+        mm = re.search(r"metrics: \[(.*?)\n    \]", body, re.S)
+        keys = set(re.findall(r"\[\s*'[^']*'\s*,\s*'(\w+)'", mm.group(1))) if mm else set()
+        if keys and keys <= delivery_keys:
+            gs_shapes.add(name)
+
+    checks += 1
+    if not gen_shapes:
+        fails.append("DELIVERY_ONLY_SHAPES not found in gen_reporting_feed.py")
+    elif gen_shapes != gs_shapes:
+        fails.append(f"delivery-only shapes disagree: generator {sorted(gen_shapes)}, "
+                     f"{GS.name} SHAPES with only delivery metrics {sorted(gs_shapes)}")
+
+    import csv
+    with open(ROOT / "seeds" / "segment_report_config.csv", newline="") as f:
+        want_exempt = {r["row_label"].strip() for r in csv.DictReader(f)
+                       if r["shape"].strip() in gs_shapes}
+    zb = re.search(r"health_zero as \((.*?)\n\),", sql, re.S)
+    lst = re.search(r"segment not in \((.*?)\)", zb.group(1), re.S) if zb else None
+    got_exempt = {x.replace("''", "'") for x in
+                  re.findall(r"'((?:[^']|'')*)'", lst.group(1))} - {""} if lst else None
+    checks += 1
+    if got_exempt is None:
+        fails.append("health_zero has no `segment not in (...)` exemption")
+    elif got_exempt != want_exempt:
+        fails.append(f"health_zero exempts {sorted(got_exempt)}, but the seed puts "
+                     f"{sorted(want_exempt)} on delivery-only shapes")
+
     print(f"feed contract: {checks} checks")
     for f in fails:
         print(f"  FAIL  {f}")
