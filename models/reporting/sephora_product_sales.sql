@@ -42,7 +42,9 @@
   Column is named sales_usd. Sephora CA sales per unit is about 99% of
   retail_price, which equals the jm.com USD list price, so it looks like USD; the
   retailer was asked to confirm. Shopify SKUs (e.g. JFA2-01-0002) do NOT match
-  jm_sku (e.g. 4599); a mapping by product name and size or by UPC is a later step.
+  jm_sku (e.g. 4599), and jm_sku is not unique, so the Shopify columns come from
+  sephora_shopify_sku_map, which matches on UPC. shopify_match = 'none' marks a SKU
+  jm.com does not carry (Canada-only SPF formulas today).
 ════════════════════════════════════════════════════════════════════════════════
 */
 
@@ -61,7 +63,7 @@ select
     location_type,
 
     channel_sku,
-    upc,
+    src.upc,
     jm_sku,
     brand,
     product_name,
@@ -80,6 +82,15 @@ select
     coalesce(sales_usd, 0)                        as sales,
     coalesce(units, 0)                            as units,
 
+    m.shopify_variant_id,
+    m.shopify_product_id,
+    m.shopify_sku,
+    m.shopify_product_title,
+    m.shopify_variant_name,
+    m.match_method                                as shopify_match,
+
     delivered_at_utc,
     _source_file
 from src
+left join {{ ref('sephora_shopify_sku_map') }} m
+    on m.upc = src.upc
