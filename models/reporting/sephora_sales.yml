@@ -1,0 +1,72 @@
+version: 2
+
+models:
+
+  - name: sephora_product_sales
+    description: >
+      What Sephora says it sold, one row per date x business_unit x location_type
+      (B&M or .com) x channel_sku, country level. Sales and units are net of
+      returns; NULL in the retailer's file is loaded as 0 and flagged by
+      is_reported = 0. The retailer's numbers, a separate family from paid_*, cs_*
+      and site_*: never added together.
+    tests:
+      # One row per SKU per day per channel. A second delivery of the same week
+      # that was not replaced (loader bug) would double every figure silently.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - business_unit
+            - location_type
+            - channel_sku
+    columns:
+      - name: date
+        tests: [not_null]
+      - name: week_start_date
+        tests: [not_null]
+      - name: business_unit
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['sephora_us', 'sephora_ca']
+      - name: location_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['B&M', '.com']
+      - name: channel_sku
+        tests: [not_null]
+      - name: is_reported
+        description: 1 when the retailer's file had a sales value for the row, 0 when it was NULL.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+      - name: sales
+        description: Retailer-reported sales in USD (see the model header for the currency note), 0 where NULL. Negative = returns.
+        tests: [not_null]
+      - name: units
+        description: Retailer-reported units, 0 where NULL. Negative = returns.
+        tests: [not_null]
+
+  - name: sephora_sales_daily
+    description: >
+      Sephora-reported sales and units per day and business unit, split B&M and
+      .com. The join-ready grain for blended models. Net of returns; NULL counted
+      as 0 (rows_reported / skus_reported show how much the retailer filled in).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - business_unit
+    columns:
+      - name: date
+        tests: [not_null]
+      - name: business_unit
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['sephora_us', 'sephora_ca']
+      - name: sales
+        tests: [not_null]
+      - name: units
+        tests: [not_null]
