@@ -174,3 +174,36 @@ sources:
               us_traffic. Not unique on its own: us_traffic exists under both
               meta and tiktok in Sephora US, so the key is
               (business_unit, platform, campaign_key).
+
+  # ── Retailer sell-through files (Sephora US / CA, Kohl's) ───────────────────
+  # NOT a Fivetran connector. The retailer's data team drops one Parquet file per
+  # week per feed into s3://superbolt-josiemaran-retail-inbound/retail-inbound/;
+  # retailer_s3_to_redshift.py (outside this repo, josiemaran/ next to it) loads
+  # each new file into s3_raw.<retailer>_<dataset>_<grain>, daily by cron. Named
+  # `s3_retail_raw` so it can never collide with a source a Fivetran S3 connector
+  # might declare over the same schema later.
+  - name: s3_retail_raw
+    schema: s3_raw
+    description: >
+      Retailer-reported sales and units, loaded as delivered. Weeks run Sunday to
+      Saturday on the retailer's 4-5-4 calendar, so months do not line up. Each
+      week is sent once; a re-sent week replaces its rows. These are the
+      retailer's numbers, a separate family from paid_* (platform pixel), cs_*
+      (Sephora catalog-segment actions) and site_* (Shopify): never added together.
+    tables:
+      - name: sephora_product_daily
+        description: >
+          Sephora product feed. One row per date x location_type (B&M or .com) x
+          SKU, country level, no state. History from Feb 2024. sales_usd and
+          units are NULL on many SKU-days (no source record, identical for B&M
+          and .com on the same day); negative values are returns. _source_key is
+          <retailer>_<country>_<dataset>_<grain>_<start>_<end> and carries the
+          country, because retailer_country can read 'Unmatched' on other feeds.
+        columns:
+          - name: sales_usd
+            description: >
+              Retailer-reported sales. Sales per unit is about 99% of
+              retail_price, which equals the jm.com USD list price, so it is
+              consistent with USD; the retailer has been asked to confirm.
+          - name: _source_key
+            description: One delivery per logical key; the loader deletes and re-inserts it.
