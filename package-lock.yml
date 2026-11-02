@@ -16,7 +16,7 @@ packages:
     revision: 3897b0e1fec4776811ef30e108ef2917b832a3e3
   - git: https://github.com/superbolt-x/bolt-dbt-pinterest-package.git
     name: bolt_dbt_pinterest_package
-    revision: 27bd59871f420f94d2ee7062a75d73773c24a954
+    revision: 81e9e8ad4b0ba78bb03dc41eb1f873da7695510e
   - git: https://github.com/superbolt-x/bolt-dbt-snapchat-package.git
     name: bolt_dbt_snapchat_package
     revision: 0a2d699f6c861143805a5b31d58ab22583955550
