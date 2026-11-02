@@ -47,6 +47,14 @@ models:
       - name: units
         description: Retailer-reported units, 0 where NULL. Negative = returns.
         tests: [not_null]
+      - name: shopify_match
+        description: >
+          upc = the Shopify variant with this UPC was found (shopify_variant_id etc. are filled);
+          none = jm.com does not carry the SKU. See sephora_shopify_sku_map.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['upc', 'none']
 
   - name: sephora_sales_daily
     description: >
@@ -70,3 +78,24 @@ models:
         tests: [not_null]
       - name: units
         tests: [not_null]
+
+  - name: sephora_shopify_sku_map
+    description: >
+      One row per Sephora UPC, mapped to the jm.com (Shopify) variant with the same
+      barcode. Join on shopify_variant_id to set Sephora sell-through beside jm.com
+      sales by product. Keyed on UPC, not jm_sku (Sephora's jm_sku is not unique).
+      match_method 'none' = a SKU jm.com does not carry.
+    tests:
+      # A variant can legitimately sit under two UPCs, so only the UPC is unique.
+      - dbt_utils.expression_is_true:
+          expression: "(match_method = 'upc') = (shopify_variant_id is not null)"
+    columns:
+      - name: upc
+        tests: [not_null, unique]
+      - name: match_method
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['upc', 'none']
+      - name: shopify_current_list_price
+        description: Today's jm.com price, not the price on the day of the sale.
