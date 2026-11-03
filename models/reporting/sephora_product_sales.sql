@@ -43,8 +43,9 @@
   retail_price, which equals the jm.com USD list price, so it looks like USD; the
   retailer was asked to confirm. Shopify SKUs (e.g. JFA2-01-0002) do NOT match
   jm_sku (e.g. 4599), and jm_sku is not unique, so the Shopify columns come from
-  sephora_shopify_sku_map, which matches on UPC. shopify_match = 'none' marks a SKU
-  jm.com does not carry (Canada-only SPF formulas today).
+  sephora_shopify_sku_map, which matches on UPC. shopify_match says how: upc,
+  override (hand-mapped), retailer_only (jm.com never carried it: kits, Canada-only
+  formulas) or none (not looked at yet; fails a test).
 ════════════════════════════════════════════════════════════════════════════════
 */
 

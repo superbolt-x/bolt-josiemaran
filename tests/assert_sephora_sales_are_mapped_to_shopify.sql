@@ -3,8 +3,8 @@
 -- SPF formulas today) is allowed to be unmapped. A new Sephora-only product that sells
 -- and has no Shopify match would otherwise drop out of every by-product comparison
 -- without an error anywhere. Returns the unmapped SKUs; the test passes when it
--- returns none. Fix: give the Shopify variant the UPC as its barcode, or add an
--- override to sephora_shopify_sku_map.
+-- returns none. Fix: give the Shopify variant the UPC as its barcode, or add a row to the
+-- overrides CTE in sephora_shopify_sku_map (retailer-only SKUs included).
 
 select
     upc,
