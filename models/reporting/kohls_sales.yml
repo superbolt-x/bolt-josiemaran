@@ -1,0 +1,64 @@
+version: 2
+
+models:
+
+  - name: kohls_product_sales
+    description: >
+      What Kohl's says it sold, one row per week x SKU, US, summed over its stores.
+      Sales and units are net of returns. Rows exist only where something sold or was
+      returned; a missing week x SKU is 0. The retailer's numbers, a separate family
+      from paid_*, cs_* and site_*: never added together.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - week_start_date
+            - channel_sku
+    columns:
+      - name: week_start_date
+        tests: [not_null]
+      - name: business_unit
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['sephora_kohls']
+      - name: channel_sku
+        tests: [not_null]
+      - name: sales
+        tests: [not_null]
+      - name: units
+        tests: [not_null]
+      - name: shopify_match
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['upc', 'override', 'retailer_only', 'none']
+
+  - name: kohls_sales_weekly
+    description: >
+      Kohl's-reported sales and units per week. The join-ready grain for blended
+      models. Net of returns; weekly only.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - week_start_date
+            - business_unit
+    columns:
+      - name: week_start_date
+        tests: [not_null]
+      - name: sales
+        tests: [not_null]
+      - name: units
+        tests: [not_null]
+
+  - name: kohls_sales_by_state_weekly
+    description: Kohl's-reported sales and units per week and US state. Net of returns.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - week_start_date
+            - state_province
+    columns:
+      - name: week_start_date
+        tests: [not_null]
+      - name: state_province
+        tests: [not_null]
