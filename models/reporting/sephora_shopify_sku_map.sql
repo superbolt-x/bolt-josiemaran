@@ -7,7 +7,8 @@
   josiemaran_sephora_shopify_sku_map
 ════════════════════════════════════════════════════════════════════════════════
 
-  GRAIN  one row per  retailer UPC (Sephora product feed and Kohl's product-by-store feed)
+  GRAIN  one row per  retailer UPC (Sephora product feed, Sephora product-by-store feed,
+                       Kohl's product-by-store feed)
 
   Maps every UPC the retailers have reported to the jm.com (Shopify) variant that carries
   the same barcode, so Sephora sell-through can be set beside jm.com sales by
@@ -43,10 +44,13 @@
   shopify_current_list_price is today's jm.com price, not the price on the day of
   the sale. Use it for orientation, not for historical discount maths.
 
-  Built from the Sephora product feed and the Kohl's product-by-store feed (the
-  model keeps its Sephora name: Kohl's sells Sephora-sold UPCs, 59 of its 70, so one
-  map serves both). Still to add when modelled: the Sephora product-by-store feed
-  (157 UPCs the product feed does not have) -- add its source to the `upcs` CTE.
+  Built from the Sephora product feed, the Sephora product-by-store feed and the
+  Kohl's product-by-store feed (the model keeps its Sephora name: the three feeds
+  share most UPCs, so one map serves all). The product-by-store feed adds 148 UPCs
+  the other two never carry, almost all with zero units (store inventory of retired
+  or minis items, 109 of 251 UPCs on a Shopify barcode), so most of the `none` rows
+  are not a problem: only a SKU that SELLS is tested, in the product-sales models.
+  Add a new feed's UPCs to the `upcs` CTE when it is modelled.
 ════════════════════════════════════════════════════════════════════════════════
 */
 
@@ -60,6 +64,12 @@ with upcs as (
 
     select upc
     from {{ source('s3_retail_raw', 'kohls_product_store_weekly') }}
+    where upc is not null
+
+    union
+
+    select upc
+    from {{ source('s3_retail_raw', 'sephora_product_store_weekly') }}
     where upc is not null
 
 ),
@@ -82,6 +92,8 @@ overrides as (
     select '840049917583', null                                  -- Fragrance Mist, In Bed, 3.38 fl oz (not on jm.com)
     union all
     select '840049902145', null                                  -- Kohl's only: no name in the feed, 1 unit / $21 net, no Shopify barcode
+    union all
+    select '840049915909', null                                  -- Vanilla Vibezzz 15 mL body butter sample (54 units, 1 week): jm.com has only the Golden Hour and Topless Tangerine samples
 
 ),
 
