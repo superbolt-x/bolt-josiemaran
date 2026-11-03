@@ -491,8 +491,10 @@ connectors finish syncing, which works out to roughly every four hours.
 | `hypotheses_imply` | tiktok_performance | the TikTok connector | the TikTok models |
 | `outboard_mixed` | google_performance | the Google connector | the Google models |
 | `confirm_pogo` | JM budget pacing + sales vs spend | the job `legged_earplugs` | `budget_pacing`, `dtc_sales_vs_spend`, and their tests |
+| `sephora_retail_sales` | Retailer sales | daily 10:30 UTC, after the 10:00 loader | `+sephora_sales_daily +kohls_sales_weekly +kohls_sales_by_state_weekly`, and their tests |
+| `retail_blended` | Retail beside spend | the job `legged_earplugs` | `kohls_sales_daily_estimated`, `retail_blended_performance`, and their tests (reads the retail tables built by `sephora_retail_sales`) |
 
-Jobs trigger off connectors, not off each other (only `confirm_pogo` follows another job), so one failing does not stop the rest.
+Jobs trigger off connectors, not off each other (only `confirm_pogo` and `retail_blended` follow another job), so one failing does not stop the rest.
 
 **The existing jobs run SELECTED models, not the whole project, so a new model is not built until
 it is added to a job.** Checked 2026-10-07: the 16:05 UTC run rebuilt `blended_performance` and

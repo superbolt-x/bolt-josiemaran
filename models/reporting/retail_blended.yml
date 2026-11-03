@@ -1,0 +1,84 @@
+version: 2
+
+models:
+
+  - name: kohls_sales_daily_estimated
+    description: >
+      Kohl's weekly sales and units spread evenly over the 7 days of each delivered
+      week (an estimate, is_estimated is always true). The 7 days add back to the
+      week exactly, so weeks and whole-week periods tie to kohls_sales_weekly; a
+      single day is approximate and must not be read as real daily sales.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date
+            - business_unit
+    columns:
+      - name: date
+        tests: [not_null]
+      - name: business_unit
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['sephora_kohls']
+      - name: is_estimated
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true]
+
+  - name: retail_blended_performance
+    description: >
+      Retailer sell-through beside spend, one row per business_unit x date x
+      date_granularity (day, week, month, quarter, year), for sephora_us,
+      sephora_ca and sephora_kohls. A separate table from blended_performance,
+      which it does not change. retailer_* columns are the retailer's numbers: a
+      separate family from paid_*, cs_*, ga4_* and shopify_*, never added to them.
+      Kohl's is weekly in the source and spread evenly over days, so read
+      retailer_includes_estimate and retailer_period_complete.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - business_unit
+            - date
+            - date_granularity
+    columns:
+      - name: business_unit
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['sephora_us', 'sephora_ca', 'sephora_kohls']
+      - name: date
+        description: Start of the period. Weeks start on Sunday.
+        tests: [not_null]
+      - name: date_granularity
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['day', 'week', 'month', 'quarter', 'year']
+      - name: spend
+        description: Paid spend of the unit's Sephora segments (Traffic + Collab for US and CA, Sephora @ Kohls). NULL where nothing was spent.
+      - name: retailer_sales
+        description: Retailer-reported net sales (USD; Sephora CA treated as USD). NULL when the retailer has delivered no day of the period.
+      - name: retailer_units
+        description: Retailer-reported net units. Kohl's units are fractional (weekly spread).
+      - name: retailer_sales_bm
+        description: Sephora stores. NULL for Kohl's, which sends no channel split.
+      - name: retailer_sales_com
+        description: Sephora .com. NULL for Kohl's.
+      - name: days_in_period
+        description: Calendar days in the period.
+      - name: retailer_days_covered
+        description: Days of the period the retailer has delivered (0 when none).
+      - name: retailer_period_complete
+        description: 1 when every day of the period is delivered. A partly delivered period (the current month, a missing week) sums what exists.
+        tests: [not_null, {accepted_values: {values: [0, 1]}}]
+      - name: retailer_includes_estimate
+        description: 1 when part of retailer_* rests on the Kohl's weekly spread (every Kohl's day row; a month, quarter or year with a week straddling its edge). A Kohl's week is 0.
+        tests: [not_null, {accepted_values: {values: [0, 1]}}]
+      - name: retailer_sales_estimated
+        description: The part of retailer_sales that is such an estimate.
+      - name: retail_data_through
+        description: Last day the retailer has delivered for the unit.
+      - name: sell_through_per_spend_dollar
+        description: retailer_sales / spend, only when the retail period is complete and spend > 0. Not ROAS, sales are not attributed to the ads. Re-derive from the sums when aggregating rows.
