@@ -207,6 +207,13 @@ sources:
               consistent with USD; the retailer has been asked to confirm.
           - name: _source_key
             description: One delivery per logical key; the loader deletes and re-inserts it.
+      - name: sephora_product_store_weekly
+        description: >
+          Sephora product by store, weekly, from 2024-08-04: units and store on-hand
+          per week x store x SKU, US, CA and 'unmatched' (closed) stores. Read for its
+          UPCs by sephora_shopify_sku_map; no sales model on it yet. The CA week
+          2026-08-16 arrived with upc, jm_sku and every product attribute NULL (5,004
+          rows, 3,874 units): the SKUs are still in channel_sku.
       - name: kohls_product_store_weekly
         description: >
           Kohl's product by store, weekly, from 2025-08-31. One row per week x store x
