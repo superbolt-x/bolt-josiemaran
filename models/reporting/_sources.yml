@@ -207,6 +207,11 @@ sources:
               consistent with USD; the retailer has been asked to confirm.
           - name: _source_key
             description: One delivery per logical key; the loader deletes and re-inserts it.
+      - name: kohls_product_store_weekly
+        description: >
+          Kohl's product by store, weekly, from 2025-08-31. One row per week x store x
+          SKU, with state, territory, region and district. Read for its UPCs by
+          sephora_shopify_sku_map; no sales model on it yet.
 
   # ── Shopify catalog (read for the Sephora SKU map) ──────────────────────────
   # Named `shopify_catalog_raw` rather than `shopify` so it cannot collide with the
