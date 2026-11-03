@@ -29,7 +29,9 @@
 
   ── Retail side (retailer_*) ────────────────────────────────────────────────
   Sephora: josiemaran_sephora_sales_daily, rolled up. Kohl's: the WEEKLY figure
-  spread evenly over 7 days (josiemaran_kohls_sales_daily_estimated), rolled up.
+  (stores + .com) spread evenly over 7 days (josiemaran_kohls_sales_daily_estimated),
+  rolled up. Kohl's .com is a stop-gap from the client's workbook, not the
+  retailer's feed: retailer_sales_com / _bm are filled for Kohl's too.
   The retailer's numbers are a separate family from paid_*, cs_*, ga4_* and
   shopify_*: never add them to any of those. Sales are net of returns; a NULL in
   Sephora's file counts as $0; Sephora CA is treated as USD.
@@ -37,6 +39,9 @@
     retailer_days_covered      days in the period the retailer has delivered
     days_in_period             calendar days in the period
     retailer_period_complete   1 when every day of the period is delivered
+    retailer_com_missing       1 when a Kohl's week in the period has no .com figure
+                               (the .com stop-gap does not reach it): the total is
+                               stores only for those weeks. Always 0 for Sephora
     retailer_includes_estimate 1 when any of the retailer_* figures rests on the
                                Kohl's weekly spread for days the week does not
                                fully cover (every Kohl's day row; a month with a
@@ -124,7 +129,7 @@ retail_daily as (
     select
         date, week_start_date, (week_start_date + 6)::date as week_end_date, business_unit,
         sales, sales_bm, sales_com, units, units_bm, units_com,
-        false as is_estimated
+        false as is_estimated, 1 as has_com
     from {{ ref('sephora_sales_daily') }}
     where business_unit in ('sephora_us', 'sephora_ca')
 
@@ -132,11 +137,8 @@ retail_daily as (
 
     select
         date, week_start_date, week_end_date, business_unit,
-        sales,
-        cast(null as double precision), cast(null as double precision),
-        units,
-        cast(null as double precision), cast(null as double precision),
-        is_estimated
+        sales, sales_bm, sales_com, units, units_bm, units_com,
+        is_estimated, has_com
     from {{ ref('kohls_sales_daily_estimated') }}
 
 ),
@@ -156,7 +158,7 @@ retail_periods as (
         gr.date_granularity,
         {{ jm_period_start('r.date', 'gr.date_granularity') }} as date,
         r.date as day,
-        r.week_start_date, r.week_end_date, r.is_estimated,
+        r.week_start_date, r.week_end_date, r.is_estimated, r.has_com,
         r.sales, r.sales_bm, r.sales_com, r.units, r.units_bm, r.units_com
     from retail_daily r
     cross join grains gr
@@ -184,6 +186,7 @@ retail as (
         sum(units_bm)                             as retailer_units_bm,
         sum(units_com)                            as retailer_units_com,
         count(distinct day)                       as retailer_days_covered,
+        max(case when has_com = 0 then 1 else 0 end) as retailer_com_missing,
 
         -- a day's figure is an estimate when its source week is not wholly inside
         -- the period: always for a day, never for a week
@@ -225,6 +228,7 @@ joined as (
         r.retailer_sales, r.retailer_sales_bm, r.retailer_sales_com,
         r.retailer_units, r.retailer_units_bm, r.retailer_units_com,
         r.retailer_days_covered,
+        r.retailer_com_missing,
         r.retailer_includes_estimate,
         r.retailer_sales_estimated,
         r.period_end                                       as retail_period_end
@@ -265,6 +269,7 @@ select
                     when 'quarter' then (dateadd(month, 3, j.date)::date - j.date)
                     when 'year'    then (dateadd(year, 1, j.date)::date - j.date)
                 end then 1 else 0 end                      as retailer_period_complete,
+    coalesce(j.retailer_com_missing, 0)                    as retailer_com_missing,
     coalesce(j.retailer_includes_estimate, 0)              as retailer_includes_estimate,
     j.retailer_sales_estimated,
     t.retail_data_through,

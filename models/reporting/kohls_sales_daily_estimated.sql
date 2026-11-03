@@ -23,6 +23,9 @@
     * a month, quarter or year is exact when it is made of whole weeks and
       approximate for the weeks that straddle its boundary (split by day count)
 
+  sales and units are stores plus .com (kohls_sales_weekly); has_com = 0 for a week
+  the .com stop-gap does not cover, whose total is stores only.
+
   Do not use this table for day-over-day charts. Units stay fractional on
   purpose: rounding would break the weekly total.
 
@@ -46,6 +49,11 @@ select
 
     w.sales / 7.0                              as sales,
     w.units / 7.0                              as units,
+    w.sales_bm / 7.0                           as sales_bm,
+    w.sales_com / 7.0                          as sales_com,
+    w.units_bm / 7.0                           as units_bm,
+    w.units_com / 7.0                          as units_com,
+    w.has_com,
 
     true                                       as is_estimated,
     'weekly_spread'                            as source_grain

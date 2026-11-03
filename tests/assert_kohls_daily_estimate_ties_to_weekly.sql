@@ -10,7 +10,8 @@ select
 from {{ ref('kohls_sales_weekly') }} w
 left join {{ ref('kohls_sales_daily_estimated') }} d
     on d.week_start_date = w.week_start_date
-group by w.week_start_date, w.sales, w.units
+group by w.week_start_date, w.sales, w.units, w.sales_bm
 having count(d.date) <> 7
     or abs(sum(d.sales) - w.sales) > 0.01
     or abs(sum(d.units) - w.units) > 0.001
+    or abs(sum(d.sales_bm) - w.sales_bm) > 0.01
