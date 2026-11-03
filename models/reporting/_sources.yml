@@ -219,6 +219,13 @@ sources:
           Kohl's product by store, weekly, from 2025-08-31. One row per week x store x
           SKU, with state, territory, region and district. Read for its UPCs by
           sephora_shopify_sku_map; no sales model on it yet.
+      - name: kohls_com_weekly_workbook
+        description: >
+          STOP-GAP. Kohl's.com sales and units per week x UPC (nonzero rows), taken from the
+          client's "Sephora_Kohls - Sales SKU Summary" workbook (WeeklyData, Sales_COM / Units_COM)
+          by josiemaran/kohls_com_from_workbook.py, run by hand with a newer workbook. The
+          retailer's own Kohl's files are stores only. Replaced in full on every load. Drop it
+          when the retailer delivers a .com feed.
 
   # ── Shopify catalog (read for the Sephora SKU map) ──────────────────────────
   # Named `shopify_catalog_raw` rather than `shopify` so it cannot collide with the

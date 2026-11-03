@@ -46,9 +46,17 @@ models:
       - name: week_start_date
         tests: [not_null]
       - name: sales
+        description: Stores plus .com. Short by .com for a week with has_com = 0.
         tests: [not_null]
       - name: units
         tests: [not_null]
+      - name: sales_bm
+        description: Stores, from the retailer's weekly files.
+      - name: sales_com
+        description: Kohl's.com from the client's workbook (stop-gap). NULL when has_com = 0.
+      - name: has_com
+        description: 1 when the workbook covers the week.
+        tests: [not_null, {accepted_values: {values: [0, 1]}}]
 
   - name: kohls_sales_by_state_weekly
     description: Kohl's-reported sales and units per week and US state. Net of returns.
