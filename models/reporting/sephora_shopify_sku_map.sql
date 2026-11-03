@@ -7,9 +7,9 @@
   josiemaran_sephora_shopify_sku_map
 ════════════════════════════════════════════════════════════════════════════════
 
-  GRAIN  one row per  Sephora UPC
+  GRAIN  one row per  retailer UPC (Sephora product feed and Kohl's product-by-store feed)
 
-  Maps every UPC Sephora has reported to the jm.com (Shopify) variant that carries
+  Maps every UPC the retailers have reported to the jm.com (Shopify) variant that carries
   the same barcode, so Sephora sell-through can be set beside jm.com sales by
   product: join on shopify_variant_id (it is the variant_id in
   josiemaran_shopify_daily_sales_by_order_line_item) or on shopify_product_id.
@@ -43,15 +43,23 @@
   shopify_current_list_price is today's jm.com price, not the price on the day of
   the sale. Use it for orientation, not for historical discount maths.
 
-  Built from the Sephora product feed only. When the Sephora product-by-store and
-  Kohl's feeds are loaded, add their UPCs to the `upcs` CTE.
+  Built from the Sephora product feed and the Kohl's product-by-store feed (the
+  model keeps its Sephora name: Kohl's sells Sephora-sold UPCs, 59 of its 70, so one
+  map serves both). Still to add when modelled: the Sephora product-by-store feed
+  (157 UPCs the product feed does not have) -- add its source to the `upcs` CTE.
 ════════════════════════════════════════════════════════════════════════════════
 */
 
 with upcs as (
 
-    select distinct upc
+    select upc
     from {{ source('s3_retail_raw', 'sephora_product_daily') }}
+    where upc is not null
+
+    union
+
+    select upc
+    from {{ source('s3_retail_raw', 'kohls_product_store_weekly') }}
     where upc is not null
 
 ),
