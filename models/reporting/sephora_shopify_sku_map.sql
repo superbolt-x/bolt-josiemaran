@@ -80,6 +80,8 @@ overrides as (
     select '840049915411', null                                  -- Sun Milk SPF 33 (Canada formula)
     union all
     select '840049917583', null                                  -- Fragrance Mist, In Bed, 3.38 fl oz (not on jm.com)
+    union all
+    select '840049902145', null                                  -- Kohl's only: no name in the feed, 1 unit / $21 net, no Shopify barcode
 
 ),
 
