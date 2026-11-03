@@ -22,12 +22,18 @@
   with the product name and size on every one of the first 36 matches.
 
   ── match_method ────────────────────────────────────────────────────────────
-    upc    exactly one Shopify variant carries this barcode (the normal case)
-    none   no Shopify variant has it. Today that is three Canada-only SPF
-           formulas (Rev2022) that jm.com does not sell, which carry only returns.
-           A SKU with positive Sephora sales and no match fails
-           assert_sephora_sales_are_mapped_to_shopify, so a new Sephora-only
-           product is caught instead of silently missing from product comparisons.
+    upc            exactly one Shopify variant carries this barcode (the normal case)
+    override       the UPC is not on any Shopify variant, but the `overrides` CTE
+                   below ties it to one by Shopify sku (same product, size and
+                   price, different UPC: Sephora has re-labelled it)
+    retailer_only  listed in `overrides` with no Shopify sku: jm.com has never sold
+                   it (Sephora holiday kits, the Canada-only SPF formulas, ...).
+                   Intentionally unmapped; the test does not flag it.
+    none           no Shopify variant has it and nobody has looked yet. A SKU with
+                   positive Sephora sales and match_method none fails
+                   assert_sephora_sales_are_mapped_to_shopify, so a new Sephora-only
+                   product is caught instead of silently missing from product
+                   comparisons. Resolve it by adding a row to `overrides`.
 
   If a barcode ever sits on two Shopify variants, the most recently updated one is
   taken (so the join can never fan out) and
@@ -50,6 +56,25 @@ with upcs as (
 
 ),
 
+-- UPCs that cannot be matched on barcode. shopify_sku set = same product under a
+-- different UPC (checked on name, size and list price); NULL = retailer-only.
+-- Reviewed 2026-11-03 against the full Sephora history.
+overrides as (
+
+    select '840049913066' as upc, 'JFC9-01-0002' as shopify_sku  -- Pink Algae Pro-Retinol Body Butter, Always Nude, 6 fl oz, $42
+    union all
+    select '840049914407', 'JFF2-01-0002'                        -- Pink Algae Pro-Retinol Moisturizer, 1.7 fl oz, $54
+    union all
+    select '840049916661', null                                  -- Bite, Sized Butters Holiday 2025 (kit, never on jm.com)
+    union all
+    select '840049913714', null                                  -- Topless Tangerine Treats Kit (kit, never on jm.com)
+    union all
+    select '840049915411', null                                  -- Sun Milk SPF 33 (Canada formula)
+    union all
+    select '840049917583', null                                  -- Fragrance Mist, In Bed, 3.38 fl oz (not on jm.com)
+
+),
+
 variants as (
 
     select
@@ -63,26 +88,41 @@ variants as (
         row_number() over (
             partition by trim(v.barcode)
             order by v.updated_at desc, v.id
-        )                                       as rn
+        )                                       as rn,
+        row_number() over (
+            partition by v.sku
+            order by v.updated_at desc, v.id
+        )                                       as rn_sku
     from {{ source('shopify_catalog_raw', 'product_variant') }} v
     join {{ source('shopify_catalog_raw', 'product') }} p
         on p.id = v.product_id
-    where v.barcode is not null
-      and trim(v.barcode) <> ''
-      and not coalesce(p._fivetran_deleted, false)
+    where not coalesce(p._fivetran_deleted, false)
 
 )
 
 select
     u.upc,
-    v.variant_id                                as shopify_variant_id,
-    v.product_id                                as shopify_product_id,
-    v.sku                                       as shopify_sku,
-    v.product_title                             as shopify_product_title,
-    v.display_name                              as shopify_variant_name,
-    v.price                                     as shopify_current_list_price,
-    case when v.variant_id is null then 'none' else 'upc' end as match_method
+    coalesce(vs.variant_id, v.variant_id)               as shopify_variant_id,
+    coalesce(vs.product_id, v.product_id)               as shopify_product_id,
+    coalesce(vs.sku, v.sku)                             as shopify_sku,
+    coalesce(vs.product_title, v.product_title)         as shopify_product_title,
+    coalesce(vs.display_name, v.display_name)           as shopify_variant_name,
+    coalesce(vs.price, v.price)                         as shopify_current_list_price,
+    case
+        when o.upc is not null and o.shopify_sku is null then 'retailer_only'
+        when vs.variant_id is not null                   then 'override'
+        when v.variant_id is not null                    then 'upc'
+        else 'none'
+    end                                                 as match_method
 from upcs u
+left join overrides o
+    on o.upc = u.upc
+left join variants vs
+    on vs.sku = o.shopify_sku
+   and vs.rn_sku = 1
 left join variants v
     on v.barcode = u.upc
    and v.rn = 1
+   and o.upc is null
+   and v.barcode is not null
+   and v.barcode <> ''

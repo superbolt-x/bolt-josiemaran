@@ -50,11 +50,13 @@ models:
       - name: shopify_match
         description: >
           upc = the Shopify variant with this UPC was found (shopify_variant_id etc. are filled);
-          none = jm.com does not carry the SKU. See sephora_shopify_sku_map.
+          override = mapped by hand (sephora_shopify_sku_map); retailer_only = jm.com
+          never carried the SKU (kits, Canada formulas); none = not looked at yet,
+          fails assert_sephora_sales_are_mapped_to_shopify when it sells.
         tests:
           - not_null
           - accepted_values:
-              values: ['upc', 'none']
+              values: ['upc', 'override', 'retailer_only', 'none']
 
   - name: sephora_sales_daily
     description: >
@@ -84,11 +86,11 @@ models:
       One row per Sephora UPC, mapped to the jm.com (Shopify) variant with the same
       barcode. Join on shopify_variant_id to set Sephora sell-through beside jm.com
       sales by product. Keyed on UPC, not jm_sku (Sephora's jm_sku is not unique).
-      match_method 'none' = a SKU jm.com does not carry.
+      match_method retailer_only = a SKU jm.com does not carry.
     tests:
       # A variant can legitimately sit under two UPCs, so only the UPC is unique.
       - dbt_utils.expression_is_true:
-          expression: "(match_method = 'upc') = (shopify_variant_id is not null)"
+          expression: "(match_method in ('upc', 'override')) = (shopify_variant_id is not null)"
     columns:
       - name: upc
         tests: [not_null, unique]
@@ -96,6 +98,6 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['upc', 'none']
+              values: ['upc', 'override', 'retailer_only', 'none']
       - name: shopify_current_list_price
         description: Today's jm.com price, not the price on the day of the sale.
