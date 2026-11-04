@@ -203,8 +203,8 @@ sources:
           - name: sales_usd
             description: >
               Retailer-reported sales. Sales per unit is about 99% of
-              retail_price, which equals the jm.com USD list price, so it is
-              consistent with USD; the retailer has been asked to confirm.
+              retail_price, which equals the jm.com USD list price; the retailer
+              confirmed on 2026-11-04 that all sales, CA included, are in USD.
           - name: _source_key
             description: One delivery per logical key; the loader deletes and re-inserts it.
       - name: sephora_product_store_weekly
