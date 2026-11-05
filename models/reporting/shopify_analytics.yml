@@ -1,0 +1,14 @@
+version: 2
+
+models:
+
+  - name: shopify_sales_analytics
+    description: >
+      Shopify Analytics' own sales (gross, discounts, returns, net, shipping, taxes, total) by
+      day / week / month / quarter / year. Edits, exchanges and returns land on the day they happen,
+      so it matches Shopify's reports; revenue = net_sales + shipping_charges. Days in America/Los_Angeles.
+    columns:
+      - name: unique_key
+        tests:
+          - unique
+          - not_null

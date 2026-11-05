@@ -241,3 +241,15 @@ sources:
             description: UPC. Filled on most variants, not all (some jm.com variants have none). Unique across variants today.
       - name: product
         description: One row per product; _fivetran_deleted marks products removed from Shopify.
+
+  # ── Shopify Analytics (ShopifyQL) ───────────────────────────────────────────
+  # Separate name for the same reason as `shopify_catalog_raw`.
+  - name: shopify_analytics_raw
+    schema: shopify_raw
+    tables:
+      - name: analytics_sales_by_order_day
+        description: >
+          Shopify Analytics sales by order and day (ShopifyQL), written by the server pipeline
+          elt/sources/shopify.py (connector atmosphere_numbing). The last 3 days are re-pulled
+          every run; history backfilled from the first order (2017-09). Days are in the store
+          time zone, America/Los_Angeles.
