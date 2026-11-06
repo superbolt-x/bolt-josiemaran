@@ -30,8 +30,8 @@
   ── Retail side (retailer_*) ────────────────────────────────────────────────
   Sephora: josiemaran_sephora_sales_daily, rolled up. Kohl's: the WEEKLY figure
   (stores + .com) spread evenly over 7 days (josiemaran_kohls_sales_daily_estimated),
-  rolled up. Kohl's .com is a stop-gap from the client's workbook, not the
-  retailer's feed: retailer_sales_com / _bm are filled for Kohl's too.
+  rolled up. retailer_sales_com / _bm are filled for Kohl's too (the
+  retailer's kohls_us_product_weekly feed carries both).
   The retailer's numbers are a separate family from paid_*, cs_*, ga4_* and
   shopify_*: never add them to any of those. Sales are net of returns; a NULL in
   Sephora's file counts as $0; Sephora CA is treated as USD.
@@ -39,9 +39,9 @@
     retailer_days_covered      days in the period the retailer has delivered
     days_in_period             calendar days in the period
     retailer_period_complete   1 when every day of the period is delivered
-    retailer_com_missing       1 when a Kohl's week in the period has no .com figure
-                               (the .com stop-gap does not reach it): the total is
-                               stores only for those weeks. Always 0 for Sephora
+    retailer_com_missing       1 when a Kohl's week in the period has no .com rows
+                               (none today; the feed has both locations): the total
+                               is stores only for those weeks. Always 0 for Sephora
     retailer_includes_estimate 1 when any of the retailer_* figures rests on the
                                Kohl's weekly spread for days the week does not
                                fully cover (every Kohl's day row; a month with a

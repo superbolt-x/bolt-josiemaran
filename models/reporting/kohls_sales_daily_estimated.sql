@@ -24,7 +24,7 @@
       approximate for the weeks that straddle its boundary (split by day count)
 
   sales and units are stores plus .com (kohls_sales_weekly); has_com = 0 for a week
-  the .com stop-gap does not cover, whose total is stores only.
+  whose feed rows carry no .com, whose total is stores only.
 
   Do not use this table for day-over-day charts. Units stay fractional on
   purpose: rounding would break the weekly total.

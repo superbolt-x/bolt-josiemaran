@@ -65,9 +65,9 @@ models:
       - name: retailer_sales_bm
         description: Stores (Sephora and Kohl's).
       - name: retailer_sales_com
-        description: Sephora .com, or Kohl's.com (a stop-gap from the client's workbook; NULL for Kohl's weeks it does not cover).
+        description: Sephora .com, or Kohl's.com (NULL for a Kohl's week whose feed has no .com rows).
       - name: retailer_com_missing
-        description: 1 when a Kohl's week in the period has no .com figure, so retailer_sales is stores only for it. Always 0 for Sephora.
+        description: 1 when a Kohl's week in the period has no .com rows, so retailer_sales is stores only for it (none today). Always 0 for Sephora.
         tests: [not_null, {accepted_values: {values: [0, 1]}}]
       - name: days_in_period
         description: Calendar days in the period.
