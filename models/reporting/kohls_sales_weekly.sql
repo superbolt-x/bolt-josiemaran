@@ -9,54 +9,56 @@
 
   GRAIN  one row per  week_start_date × business_unit        (sephora_kohls)
 
-  Kohl's-reported sales and units per week, rolled up from
-  josiemaran_kohls_product_sales. The join-ready grain for the blended models: the
-  same week_start_date (Sunday) and business_unit keys as the weekly spend and
-  budget tables. Weekly only; the retailer sends no daily Kohl's figure.
+  Kohl's-reported sales and units per week, stores and .com. The join-ready grain
+  for the blended models: the same week_start_date (Sunday) and business_unit keys
+  as the weekly spend and budget tables. Weekly only; the retailer sends no daily
+  Kohl's figure.
 
-  Same rules as the product table: sales and units are NET of returns, a missing
-  week × SKU means nothing sold, and these are the retailer's numbers, never to be
-  added to paid_* / cs_* / site_* figures.
+  Sales and units are NET of returns, and these are the retailer's numbers, never to
+  be added to paid_* / cs_* / site_* figures.
 
-    skus_sold      distinct SKUs with positive units that week
-    stores_selling distinct stores that sold anything that week (from the store
-                   grain, so it is not the sum of the product rows)
+    sales_bm / units_bm    stores
+    sales_com / units_com  Kohl's.com
+    sales / units          the two added
+    has_com                1 when the week carries .com rows (every delivered week
+                           since 2026-11-05: the feed has both locations)
+    skus_sold              distinct SKUs with positive units that week, either channel
+    stores_selling         distinct stores that sold anything that week, from the
+                           store feed (stores only, so not the sum of the product rows)
 
-  ── Stores and .com ─────────────────────────────────────────────────────────
-  The retailer's Kohl's files are STORES ONLY (sales_bm, units_bm). Kohl's.com
-  comes from the client's workbook (s3_raw.kohls_com_weekly_workbook, loaded by hand,
-  a stop-gap until the retailer sends it): sales_com, units_com. sales and units are
-  the two added. has_com = 1 when the workbook covers that week; a week after its last
-  one has stores only and has_com = 0, so its total is short by .com. Read has_com.
-  The product and state models stay stores only.
+  ── Source ──────────────────────────────────────────────────────────────────
+  s3_raw.kohls_product_weekly (kohls_us_product_weekly files, SKU x location_type
+  B&M / .com, no store detail), delivered by the retailer from 2026-11-05. It
+  replaced the hand-loaded workbook stop-gap for .com and the store-level feed for
+  the stores total: the retailer's product feed is the figure it stands behind
+  (it reproduces the client's workbook to the cent, .com in 61 of 61 weeks and
+  stores in all but the five weeks where the older store feed ran high, by $4,725
+  net, $4,812 of it in week 2026-10-18). The store feed (kohls_product_sales,
+  kohls_sales_by_state_weekly) still gives product and state detail and can differ
+  from this by those weeks; assert_kohls_store_feed_ties_to_product_feed warns
+  about it.
 ════════════════════════════════════════════════════════════════════════════════
 */
 
 select
     p.week_start_date,
     p.week_end_date,
-    p.business_unit,
+    'sephora_kohls'                                                     as business_unit,
 
-    sum(p.sales) + coalesce(max(c.sales_com), 0)                        as sales,
-    sum(p.units) + coalesce(max(c.units_com), 0)                        as units,
-    sum(p.sales)                                                        as sales_bm,
-    max(c.sales_com)                                                    as sales_com,
-    sum(p.units)                                                        as units_bm,
-    max(c.units_com)                                                    as units_com,
-    case when max(c.week_start_date) is not null then 1 else 0 end      as has_com,
+    sum(coalesce(p.sales_usd, 0))                                       as sales,
+    sum(coalesce(p.units, 0))                                           as units,
+    sum(case when p.location_type = 'B&M' then coalesce(p.sales_usd, 0) else 0 end)    as sales_bm,
+    sum(case when p.location_type = '.com' then coalesce(p.sales_usd, 0) end)           as sales_com,
+    sum(case when p.location_type = 'B&M' then coalesce(p.units, 0) else 0 end)         as units_bm,
+    sum(case when p.location_type = '.com' then coalesce(p.units, 0) end)               as units_com,
+    max(case when p.location_type = '.com' then 1 else 0 end)           as has_com,
     count(distinct case when p.units > 0 then p.channel_sku end)        as skus_sold,
     max(s.stores_selling)                                               as stores_selling
-from {{ ref('kohls_product_sales') }} p
+from {{ source('s3_retail_raw', 'kohls_product_weekly') }} p
 left join (
     select week_start_date, count(distinct case when units > 0 then store_no end) as stores_selling
     from {{ source('s3_retail_raw', 'kohls_product_store_weekly') }}
     group by 1
 ) s
     on s.week_start_date = p.week_start_date
-left join (
-    select week_start_date, sum(sales_com) as sales_com, sum(units_com) as units_com
-    from {{ source('s3_retail_raw', 'kohls_com_weekly_workbook') }}
-    group by 1
-) c
-    on c.week_start_date = p.week_start_date
 group by 1, 2, 3

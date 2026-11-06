@@ -51,11 +51,11 @@ models:
       - name: units
         tests: [not_null]
       - name: sales_bm
-        description: Stores, from the retailer's weekly files.
+        description: Stores, from the retailer's kohls_product_weekly feed (B&M rows).
       - name: sales_com
-        description: Kohl's.com from the client's workbook (stop-gap). NULL when has_com = 0.
+        description: Kohl's.com from the kohls_product_weekly feed (.com rows). NULL when has_com = 0.
       - name: has_com
-        description: 1 when the workbook covers the week.
+        description: 1 when the week carries .com rows (all weeks today).
         tests: [not_null, {accepted_values: {values: [0, 1]}}]
 
   - name: kohls_sales_by_state_weekly
